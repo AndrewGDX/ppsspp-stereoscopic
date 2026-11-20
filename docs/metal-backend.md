@@ -87,6 +87,8 @@ submit.
   samples too. Metal can't copy a single plane of a multisampled depth/stencil texture, so those copy both.
   With programmable blending, the shader blends each sample with its own color, so edges come out a little
   different from Vulkan's, which blends with the resolved color.
+- Stereoscopic 3D framebuffers are two-slice arrays. Metal has no multiview, so SPIRV-Cross emulates it: each
+  eye is an instance that the vertex shader sends to its layer. See [stereoscopy.md](stereoscopy.md).
 - Readbacks for the GE debugger and screenshots work. Headless has no backbuffer to read, like headless
   Vulkan, and the debugger falls back to the PSP's framebuffer.
 
@@ -114,7 +116,6 @@ MoltenVK: wall time from 11.7% lower (Ridge Racer) to 2.6% higher, CPU time 2 to
   memoryless depth (all Apple GPU only), so they take the same paths as other GPUs elsewhere.
 - **tvOS** shares the iOS code, but hasn't been built or run with Metal.
 - **The dev screen's pipeline list** is Vulkan only.
-- **Stereo rendering** (multiview, framebuffer arrays) is deliberately left out.
 - **Making Metal the default on Mac, and removing MoltenVK,** come later. Existing iOS installs keep the
   backend saved in their ini; only new installs and reset settings get Metal. The render manager includes
   Vulkan headers for `GLSLtoSPV`, which has to change before MoltenVK can go.

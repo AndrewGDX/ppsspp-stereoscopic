@@ -31,7 +31,10 @@ struct VaryingDef {
 enum class ShaderWriterFlags {
 	NONE = 0,
 	FS_WRITE_DEPTH = 1,
-	FS_AUTO_STEREO = 2,  // Automatically indexes makes samplers tagged with `array` by gl_ViewIndex. Useful for stereo rendering.
+	// Automatically indexes makes samplers tagged with `array` by gl_ViewIndex. Useful for stereo rendering.
+	// In HLSL, those samplers are only arrays with this set, and the pixel shader gets gl_ViewIndex from a vertex
+	// shader compiled with PPSSPP_STEREO defined (see BeginVSMain), which draws an instance per eye.
+	FS_AUTO_STEREO = 2,
 };
 ENUM_CLASS_BITOPS(ShaderWriterFlags);
 
@@ -121,6 +124,10 @@ private:
 	void DeclareTexture2D(const SamplerDef &def);
 	void DeclareUniforms(const Slice<UniformDef> &uniforms);
 	const SamplerDef *GetSamplerDef(const char *name) const;
+	// The sampler is declared as a Texture2DArray in HLSL. See FS_AUTO_STEREO.
+	bool HLSLIsArray(const SamplerDef *def) const {
+		return def && (def->flags & SamplerFlags::ARRAY_ON_VULKAN) && (flags_ & ShaderWriterFlags::FS_AUTO_STEREO);
+	}
 
 	void Preamble(Slice<const char *> extensions);
 

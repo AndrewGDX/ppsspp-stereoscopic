@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cfloat>
+#include <cstring>
 #include <vector>
 #include <string>
 #include "Common/CommonWindows.h"
@@ -67,6 +68,10 @@ HRESULT CreateVertexShaderD3D11(ID3D11Device *device, const char *code, size_t c
 	if (ppVertexShader)
 		*ppVertexShader = nullptr;
 	const char *profile = featureLevel <= D3D_FEATURE_LEVEL_9_3 ? "vs_4_0_level_9_1" : "vs_4_0";
+	if (strstr(code, "SV_RenderTargetArrayIndex")) {
+		// Stereo, which picks the layer in the vertex shader (D3D11.3).
+		profile = "vs_5_0";
+	}
 	std::string errorMessage;
 	std::vector<uint8_t> byteCode = CompileShaderToBytecodeD3D11(code, codeSize, profile, flags, &errorMessage);
 	if (byteCode.empty()) {

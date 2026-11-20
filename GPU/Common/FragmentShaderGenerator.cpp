@@ -122,8 +122,8 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		*errorString = "Invalid combination of 3D texture and array texture, shouldn't happen";
 		return false;
 	}
-	if (compat.shaderLanguage != ShaderLanguage::GLSL_VULKAN && arrayTexture) {
-		*errorString = "We only do array textures for framebuffers in Vulkan.";
+	if (compat.shaderLanguage != ShaderLanguage::GLSL_VULKAN && compat.shaderLanguage != HLSL_D3D11 && arrayTexture) {
+		*errorString = "We only do array textures for framebuffers in Vulkan and D3D11.";
 		return false;
 	}
 
@@ -269,18 +269,25 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 			WRITE(p, "SamplerState texSamp : register(s0);\n");
 			if (texture3D) {
 				WRITE(p, "Texture3D<vec4> tex : register(t0);\n");
+			} else if (arrayTexture) {
+				// A stereo framebuffer, a layer per eye.
+				WRITE(p, "Texture2DArray<vec4> tex : register(t0);\n");
 			} else {
 				WRITE(p, "Texture2D<vec4> tex : register(t0);\n");
 			}
 			if (readFramebufferTex) {
 				// No sampler required, we Load
-				WRITE(p, "Texture2D<vec4> fbotex : register(t1);\n");
+				WRITE(p, "%s<vec4> fbotex : register(t1);\n", useStereo ? "Texture2DArray" : "Texture2D");
 			}
 
 			if (shaderDepalMode != ShaderDepalMode::OFF) {
 				WRITE(p, "SamplerState palSamp : register(s3);\n");
 				WRITE(p, "Texture2D<vec4> pal : register(t3);\n");
-				WRITE(p, "float2 textureSize(Texture2D<float4> tex, int mip) { float2 size; tex.GetDimensions(size.x, size.y); return size; }\n");
+				if (arrayTexture) {
+					WRITE(p, "float2 textureSize(Texture2DArray<float4> tex, int mip) { float3 size; tex.GetDimensions(size.x, size.y, size.z); return size.xy; }\n");
+				} else {
+					WRITE(p, "float2 textureSize(Texture2D<float4> tex, int mip) { float2 size; tex.GetDimensions(size.x, size.y); return size; }\n");
+				}
 			}
 
 			WRITE(p, "cbuffer base : register(b0) {\n%s};\n", ub_baseStr);
@@ -313,6 +320,10 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 			WRITE(p, "  vec3 v_color1: COLOR1;\n");
 		}
 		WRITE(p, "  %s v_fogdepth: TEXCOORD1;\n", screenLinear ? "vec2" : "float");
+		if (useStereo) {
+			// The eye (and layer), see the vertex shader.
+			WRITE(p, "  nointerpolation uint v_stereoView : TEXCOORD3;\n");
+		}
 		if (needFragCoord) {
 			if (compat.shaderLanguage == HLSL_D3D11) {
 				WRITE(p, "  vec4 pixelPos : SV_POSITION;\n");
@@ -564,12 +575,19 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		if (fsMinmaxDiscard || fsDepthClamp) {
 			WRITE(p, "  vec2 v_zw = In.v_zw;\n");
 		}
+		if (useStereo) {
+			WRITE(p, "  uint gl_ViewIndex = In.v_stereoView;\n");
+		}
 	}
 
 	// Two things read from the old framebuffer - shader replacement blending and bit-level masking.
 	if (readFramebufferTex) {
 		if (compat.shaderLanguage == HLSL_D3D11) {
-			WRITE(p, "  vec4 destColor = fbotex.Load(int3((int)gl_FragCoord.x, (int)gl_FragCoord.y, 0));\n");
+			if (useStereo) {
+				WRITE(p, "  vec4 destColor = fbotex.Load(int4((int)gl_FragCoord.x, (int)gl_FragCoord.y, gl_ViewIndex, 0));\n");
+			} else {
+				WRITE(p, "  vec4 destColor = fbotex.Load(int3((int)gl_FragCoord.x, (int)gl_FragCoord.y, 0));\n");
+			}
 		} else if (compat.shaderLanguage == GLSL_VULKAN) {
 			WRITE(p, "  lowp vec4 destColor = %s(fbotex, ivec3(gl_FragCoord.x, gl_FragCoord.y, %s), 0);\n", compat.texelFetch, useStereo ? "float(gl_ViewIndex)" : "0");
 		} else if (!compat.texelFetch) {
@@ -658,6 +676,12 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 							WRITE(p, "  vec4 t = tex.Sample(texSamp, vec3(%s.xy / %s.z, u_mipBias));\n", texcoord, texcoord);
 						} else {
 							WRITE(p, "  vec4 t = tex.Sample(texSamp, vec3(%s.xy, u_mipBias));\n", texcoord);
+						}
+					} else if (arrayTexture) {
+						if (doTextureProjection) {
+							WRITE(p, "  vec4 t = tex.Sample(texSamp, vec3(%s.xy / %s.z, float(gl_ViewIndex)));\n", texcoord, texcoord);
+						} else {
+							WRITE(p, "  vec4 t = tex.Sample(texSamp, vec3(%s.xy, float(gl_ViewIndex)));\n", texcoord);
 						}
 					} else {
 						if (doTextureProjection) {

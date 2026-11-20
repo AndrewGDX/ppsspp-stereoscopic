@@ -211,15 +211,26 @@ void ShaderWriter::BeginVSMain(Slice<InputDef> inputs, Slice<UniformDef> uniform
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
 	{
+		// PPSSPP_STEREO is defined for drawing to a layered (stereo) target: each instance goes to its layer. The
+		// layer also goes to the pixel shader as a varying, right after the others so that it lines up.
 		C("struct VS_OUTPUT {\n");
 		for (auto &varying : varyings) {
 			F("  %s %s : %s;\n", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
+		C("#ifdef PPSSPP_STEREO\n");
+		C("  nointerpolation uint stereoView : TEXCOORD7;\n");
+		C("#endif\n");
 		F("  vec4 pos : %s;\n", lang_.shaderLanguage == HLSL_D3D11 ? "SV_Position" : "POSITION");
+		C("#ifdef PPSSPP_STEREO\n");
+		C("  uint stereoLayer : SV_RenderTargetArrayIndex;\n");
+		C("#endif\n");
 		C("};\n");
 
-		C("VS_OUTPUT main(  ");  // 2 spaces for the rewind
-		C("uint gl_VertexIndex : SV_VertexID, ");
+		C("VS_OUTPUT main(\n");
+		C("#ifdef PPSSPP_STEREO\n");
+		C("  uint stereoInstance : SV_InstanceID,\n");
+		C("#endif\n");
+		C("  uint gl_VertexIndex : SV_VertexID, ");
 		// List the inputs.
 		for (auto &input : inputs) {
 			F("in %s %s : %s, ", input.type, input.name, semanticNames[input.semantic]);
@@ -278,6 +289,10 @@ void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> var
 		for (auto &varying : varyings) {
 			F("  %s %s : %s, ", varying.type, varying.name, semanticNames[varying.semantic]);
 		}
+		if (flags_ & ShaderWriterFlags::FS_AUTO_STEREO) {
+			// From a vertex shader compiled with PPSSPP_STEREO.
+			C("  nointerpolation uint gl_ViewIndex : TEXCOORD7, ");
+		}
 		// Erase the last comma
 		Rewind(2);
 
@@ -322,6 +337,10 @@ void ShaderWriter::EndVSMain(Slice<VaryingDef> varyings) {
 		for (auto &varying : varyings) {
 			F("  vs_out.%s = %s;\n", varying.name, varying.name);
 		}
+		C("#ifdef PPSSPP_STEREO\n");
+		C("  vs_out.stereoView = stereoInstance;\n");
+		C("  vs_out.stereoLayer = stereoInstance;\n");
+		C("#endif\n");
 		C("  return vs_out;\n");
 		break;
 	case GLSL_VULKAN:
@@ -387,7 +406,7 @@ void ShaderWriter::ApplySamplerMetadata(Slice<SamplerDef> samplers) {
 void ShaderWriter::DeclareTexture2D(const SamplerDef &def) {
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("Texture2D<float4> %s : register(t%d);\n", def.name, def.binding);
+		F("%s<float4> %s : register(t%d);\n", HLSLIsArray(&def) ? "Texture2DArray" : "Texture2D", def.name, def.binding);
 		break;
 	case GLSL_VULKAN:
 		// texBindingBase_ is used for the thin3d descriptor set layout, where they start at 1.
@@ -420,7 +439,11 @@ ShaderWriter &ShaderWriter::SampleTexture2D(const char *sampName, const char *uv
 	const SamplerDef *samp = GetSamplerDef(sampName);
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("%s.Sample(%sSamp, %s)", sampName, sampName, uv);
+		if (HLSLIsArray(samp)) {
+			F("%s.Sample(%sSamp, float3(%s, float(gl_ViewIndex)))", sampName, sampName, uv);
+		} else {
+			F("%s.Sample(%sSamp, %s)", sampName, sampName, uv);
+		}
 		break;
 	default:
 		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
@@ -440,7 +463,11 @@ ShaderWriter &ShaderWriter::SampleTexture2DOffset(const char *sampName, const ch
 
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("%s.Sample(%sSamp, %s, int2(%d, %d))", sampName, sampName, uv, offX, offY);
+		if (HLSLIsArray(samp)) {
+			F("%s.Sample(%sSamp, float3(%s, float(gl_ViewIndex)), int2(%d, %d))", sampName, sampName, uv, offX, offY);
+		} else {
+			F("%s.Sample(%sSamp, %s, int2(%d, %d))", sampName, sampName, uv, offX, offY);
+		}
 		break;
 	default:
 		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
@@ -460,7 +487,11 @@ ShaderWriter &ShaderWriter::LoadTexture2D(const char *sampName, const char *uv, 
 
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("%s.Load(ivec3(%s, %d))", sampName, uv, level);
+		if (HLSLIsArray(samp)) {
+			F("%s.Load(ivec4(%s, gl_ViewIndex, %d))", sampName, uv, level);
+		} else {
+			F("%s.Load(ivec3(%s, %d))", sampName, uv, level);
+		}
 		break;
 	default:
 		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.
@@ -478,7 +509,11 @@ ShaderWriter &ShaderWriter::LoadTexture2D(const char *sampName, const char *uv, 
 ShaderWriter &ShaderWriter::GetTextureSize(const char *szVariable, const char *texName) {
 	switch (lang_.shaderLanguage) {
 	case HLSL_D3D11:
-		F("  float2 %s; %s.GetDimensions(%s.x, %s.y);", szVariable, texName, szVariable, szVariable);
+		if (HLSLIsArray(GetSamplerDef(texName))) {
+			F("  float2 %s; float %s_layers; %s.GetDimensions(%s.x, %s.y, %s_layers);", szVariable, szVariable, texName, szVariable, szVariable, szVariable);
+		} else {
+			F("  float2 %s; %s.GetDimensions(%s.x, %s.y);", szVariable, texName, szVariable, szVariable);
+		}
 		break;
 	default:
 		// Note: we ignore the sampler. make sure you bound samplers to the textures correctly.

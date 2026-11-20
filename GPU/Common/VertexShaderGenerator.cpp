@@ -307,6 +307,10 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		}
 
 		WRITE(p, "  %s v_fogdepth : TEXCOORD1;\n", fogType);
+		if (useSimpleStereo) {
+			// The eye for the pixel shader. Where it is in its inputs too, so that they match.
+			WRITE(p, "  nointerpolation uint v_stereoView : TEXCOORD3;\n");
+		}
 		if (fsMinmaxDiscard || fsDepthClamp) {
 			WRITE(p, "  highp vec2 v_zw : TEXCOORD2;\n");
 		}
@@ -1107,6 +1111,7 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 
 	if (compat.shaderLanguage == HLSL_D3D11) {
 		if (useSimpleStereo) {
+			WRITE(p, "  Out.v_stereoView = In.instanceId;\n");
 			WRITE(p, "  Out.layer = In.instanceId;\n");
 		}
 		WRITE(p, "  return Out;\n");

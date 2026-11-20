@@ -303,6 +303,9 @@ void DrawEngineD3D11::Flush() {
 	// This is not done on every drawcall, we collect vertex data
 	// until critical state changes. That's when we draw (flush).
 
+	// Stereo: an instance per eye, which the vertex shader sends to its layer of the framebuffer.
+	const UINT instances = gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO) ? 2 : 1;
+
 	GEPrimitiveType prim = prevPrim_;
 
 	// Always use software for flat shading to fix the provoking index.
@@ -429,18 +432,18 @@ void DrawEngineD3D11::Flush() {
 				memcpy(iptr, decIndex_, iSize);
 				pushInds_->EndPush(context_);
 				context_->IASetIndexBuffer(pushInds_->Buf(), DXGI_FORMAT_R16_UINT, iOffset);
-				context_->DrawIndexed(vertexCount, 0, 0);
+				context_->DrawIndexedInstanced(vertexCount, instances, 0, 0, 0);
 			} else if (!useElements) {
-				context_->Draw(vertexCount, 0);
+				context_->DrawInstanced(vertexCount, instances, 0, 0);
 			}
 		} else {
 			UINT offset = 0;
 			context_->IASetVertexBuffers(0, 1, &vb_, &stride, &offset);
 			if (useElements) {
 				context_->IASetIndexBuffer(ib_, DXGI_FORMAT_R16_UINT, 0);
-				context_->DrawIndexed(vertexCount, 0, 0);
+				context_->DrawIndexedInstanced(vertexCount, instances, 0, 0, 0);
 			} else {
-				context_->Draw(vertexCount, 0);
+				context_->DrawInstanced(vertexCount, instances, 0, 0);
 			}
 		}
 		if (useDepthRaster_) {
@@ -554,7 +557,7 @@ void DrawEngineD3D11::Flush() {
 			memcpy(iptr, inds, iSize);
 			pushInds_->EndPush(context_);
 			context_->IASetIndexBuffer(pushInds_->Buf(), DXGI_FORMAT_R16_UINT, iOffset);
-			context_->DrawIndexed(result.drawIndexCount, 0, 0);
+			context_->DrawIndexedInstanced(result.drawIndexCount, instances, 0, 0, 0);
 			gpuStats.perFrame.numVertsDrawn += result.drawIndexCount;
 		} else if (action == SW_CLEAR) {
 			u32 clearColor = result.color;

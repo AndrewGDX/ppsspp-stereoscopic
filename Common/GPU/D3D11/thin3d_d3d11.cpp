@@ -15,9 +15,12 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 
+#include <algorithm>
 #include <map>
 
 #include <cfloat>
+#include <cstdlib>
+#include <cstring>
 #include <D3Dcommon.h>
 #ifndef __LIBRETRO__  // their build server uses an old SDK
 #include <dxgi1_5.h>
@@ -64,13 +67,20 @@ public:
 // A D3D11Framebuffer is a D3D11Framebuffer plus all the textures it owns.
 class D3D11Framebuffer : public Framebuffer {
 public:
-	D3D11Framebuffer(int width, int height, bool zStencil) {
+	D3D11Framebuffer(int width, int height, int layers, bool zStencil) {
 		width_ = width;
 		height_ = height;
+		layers_ = layers;
 		hasDepthStencil_ = zStencil;
 	}
 	~D3D11Framebuffer() {
 	}
+
+	// Stereo framebuffers are arrays, a layer per eye. Shaders that declare a Texture2DArray take a one-layer
+	// array view of a layer, and ones that declare a Texture2D a copy of it (a 2D view can't pick a layer).
+	ComPtr<ID3D11ShaderResourceView> layerArraySRView[2][2];  // [depth][layer]
+	ComPtr<ID3D11Texture2D> layerCopyTex[2];  // [depth]
+	ComPtr<ID3D11ShaderResourceView> layerCopySRView[2];
 
 	ComPtr<ID3D11Texture2D> colorTex;
 	ComPtr<ID3D11RenderTargetView> colorRTView;
@@ -212,6 +222,12 @@ public:
 
 private:
 	void ApplyCurrentState();
+	// Binds a shader resource that's needed as a Texture2D or a Texture2DArray depending on the shader, which
+	// ApplyCurrentState looks at. Either view can be null.
+	void SetPSResource(int slot, ID3D11ShaderResourceView *view2D, ID3D11ShaderResourceView *viewArray, bool bindArray);
+	ID3D11VertexShader *StereoVertexShader(D3D11ShaderModule *module);
+	ID3D11ShaderResourceView *LayerArrayView(D3D11Framebuffer *fb, bool depth, int layer);
+	ID3D11ShaderResourceView *LayerCopyView(D3D11Framebuffer *fb, bool depth, int layer);
 
 	HRESULT GetCachedDepthStencilState(const D3D11DepthStencilState *state, uint8_t stencilWriteMask, uint8_t stencilCompareMask, ID3D11DepthStencilState **);
 
@@ -237,6 +253,15 @@ private:
 	int bbHeight_ = 0;
 	int curRTWidth_ = 0;
 	int curRTHeight_ = 0;
+	// Stereo: draws are an instance per layer.
+	int curRTLayers_ = 1;
+
+	struct BoundResource {
+		ComPtr<ID3D11ShaderResourceView> view2D;
+		ComPtr<ID3D11ShaderResourceView> viewArray;
+		bool isArray;
+	};
+	BoundResource boundResources_[MAX_BOUND_TEXTURES]{};
 
 	AutoRef<D3D11Pipeline> curPipeline_;
 	DeviceCaps caps_{};
@@ -348,6 +373,14 @@ D3D11DrawContext::D3D11DrawContext(ComPtr<ID3D11Device> device, ComPtr<ID3D11Dev
 	caps_.presentInstantModeChange = true;
 	caps_.presentMaxInterval = 4;
 	caps_.presentModesSupported = PresentMode::FIFO | PresentMode::IMMEDIATE;
+
+#ifndef __LIBRETRO__  // Their SDK predates D3D11.3.
+	// Stereo: layered framebuffers, each eye an instance that the vertex shader sends to its layer (D3D11.3).
+	D3D11_FEATURE_DATA_D3D11_OPTIONS3 options3{};
+	if (featureLevel_ >= D3D_FEATURE_LEVEL_11_0 && SUCCEEDED(device_->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS3, &options3, sizeof(options3)))) {
+		caps_.multiViewSupported = options3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer != FALSE;
+	}
+#endif
 
 	D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
 	HRESULT result = device_->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options));
@@ -849,6 +882,15 @@ public:
 
 	ComPtr<ID3D11VertexShader> vs;
 	ComPtr<ID3D11PixelShader> ps;
+
+	// Vertex shaders: the source, for the stereo version (PPSSPP_STEREO defined), compiled when first needed.
+	std::string source;
+	ComPtr<ID3D11VertexShader> stereoVS;
+	bool stereoFailed = false;
+	// Pixel shaders: the texture slots declared as Texture2DArray, and whether it reads the eye (gl_ViewIndex), which
+	// only the stereo vertex shader outputs.
+	uint32_t arrayTextureMask = 0;
+	bool readsView = false;
 };
 
 class D3D11Pipeline : public Pipeline {
@@ -872,6 +914,9 @@ public:
 	D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 
 	std::vector<D3D11ShaderModule *> shaderModules;
+	D3D11ShaderModule *vsModule = nullptr;
+	uint32_t psArrayTextureMask = 0;
+	bool psReadsView = false;
 
 	size_t dynamicUniformsSize = 0;
 	ComPtr<ID3D11Buffer> dynamicUniforms;
@@ -896,6 +941,8 @@ public:
 	void UpdateTextureRegions(ID3D11DeviceContext *context, int level, const TextureRegionUpdate *regions, int numRegions);
 
 	ID3D11ShaderResourceView *View() { return view_.Get(); }
+	// A one-layer array view, for shaders that declare a Texture2DArray (stereo). Created when first needed.
+	ID3D11ShaderResourceView *ArrayView(ID3D11Device *device);
 
 private:
 	bool FillLevel(ID3D11DeviceContext *context, int level, int w, int h, int d, const uint8_t *const *data, TextureCallback initDataCallback);
@@ -903,8 +950,25 @@ private:
 	ComPtr<ID3D11Texture2D> tex_;
 	ComPtr<ID3D11Texture2D> stagingTex_;
 	ComPtr<ID3D11ShaderResourceView> view_;
+	ComPtr<ID3D11ShaderResourceView> arrayView_;
 	int mipLevels_ = 0;
 };
+
+ID3D11ShaderResourceView *D3D11Texture::ArrayView(ID3D11Device *device) {
+	if (!arrayView_ && tex_ && depth_ == 1) {
+		D3D11_TEXTURE2D_DESC texDesc;
+		tex_->GetDesc(&texDesc);
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		desc.Format = texDesc.Format;
+		desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		desc.Texture2DArray.MostDetailedMip = 0;
+		desc.Texture2DArray.MipLevels = texDesc.MipLevels;
+		desc.Texture2DArray.FirstArraySlice = 0;
+		desc.Texture2DArray.ArraySize = 1;
+		device->CreateShaderResourceView(tex_.Get(), &desc, &arrayView_);
+	}
+	return arrayView_.Get();
+}
 
 bool D3D11Texture::FillLevel(ID3D11DeviceContext *context, int level, int w, int h, int d, const uint8_t *const *data, TextureCallback initDataCallback) {
 	D3D11_MAPPED_SUBRESOURCE mapped;
@@ -1149,11 +1213,32 @@ ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 	}
 
 	// OK, we can now proceed
+	const std::string source((const char *)data, dataSize);
 	data = (const uint8_t *)compiled.c_str();
 	dataSize = compiled.size();
 	D3D11ShaderModule *module = new D3D11ShaderModule(tag);
 	module->stage = stage;
 	module->byteCode_ = std::vector<uint8_t>(data, data + dataSize);
+	if (stage == ShaderStage::Vertex) {
+		if (source.find("PPSSPP_STEREO") != std::string::npos) {
+			module->source = source;
+		}
+	} else if (stage == ShaderStage::Fragment) {
+		// Texture2DArray<float4> name : register(tN);
+		size_t pos = 0;
+		while ((pos = source.find("Texture2DArray<", pos)) != std::string::npos) {
+			size_t reg = source.find("register(t", pos);
+			size_t end = source.find(';', pos);
+			if (reg != std::string::npos && reg < end) {
+				int slot = atoi(source.c_str() + reg + strlen("register(t"));
+				if (slot >= 0 && slot < MAX_BOUND_TEXTURES) {
+					module->arrayTextureMask |= 1 << slot;
+				}
+			}
+			pos = end == std::string::npos ? source.size() : end;
+		}
+		module->readsView = source.find("gl_ViewIndex") != std::string::npos;
+	}
 	switch (stage) {
 	case ShaderStage::Vertex:
 		result = device_->CreateVertexShader(data, dataSize, nullptr, &module->vs);
@@ -1209,9 +1294,12 @@ Pipeline *D3D11DrawContext::CreateGraphicsPipeline(const PipelineDesc &desc, con
 		case ShaderStage::Vertex:
 			vshader = module;
 			dPipeline->vs = module->vs;
+			dPipeline->vsModule = module;
 			break;
 		case ShaderStage::Fragment:
 			dPipeline->ps = module->ps;
+			dPipeline->psArrayTextureMask = module->arrayTextureMask;
+			dPipeline->psReadsView = module->readsView;
 			break;
 		case ShaderStage::Compute:
 			break;
@@ -1290,9 +1378,17 @@ void D3D11DrawContext::ApplyCurrentState() {
 		context_->IASetInputLayout(curPipeline_->il.Get());
 		curInputLayout_ = curPipeline_->il;
 	}
-	if (curVS_ != curPipeline_->vs) {
-		context_->VSSetShader(curPipeline_->vs.Get(), nullptr, 0);
-		curVS_ = curPipeline_->vs;
+	ID3D11VertexShader *vs = curPipeline_->vs.Get();
+	if (curRTLayers_ > 1 || curPipeline_->psReadsView) {
+		// Picks the layer and passes the eye on (one instance per layer). With a single layer, it's layer 0.
+		ID3D11VertexShader *stereoVS = StereoVertexShader(curPipeline_->vsModule);
+		if (stereoVS) {
+			vs = stereoVS;
+		}
+	}
+	if (curVS_.Get() != vs) {
+		context_->VSSetShader(vs, nullptr, 0);
+		curVS_ = vs;
 	}
 	if (curPS_ != curPipeline_->ps) {
 		context_->PSSetShader(curPipeline_->ps.Get(), nullptr, 0);
@@ -1314,6 +1410,95 @@ void D3D11DrawContext::ApplyCurrentState() {
 		context_->VSSetConstantBuffers(0, 1, curPipeline_->dynamicUniforms.GetAddressOf());
 		context_->PSSetConstantBuffers(0, 1, curPipeline_->dynamicUniforms.GetAddressOf());
 	}
+
+	// Give each texture slot the view (2D or array) the shader declares.
+	for (int i = 0; i < MAX_BOUND_TEXTURES; i++) {
+		BoundResource &bound = boundResources_[i];
+		const bool wantArray = (curPipeline_->psArrayTextureMask & (1 << i)) != 0;
+		if (bound.isArray != wantArray) {
+			ID3D11ShaderResourceView *view = wantArray ? bound.viewArray.Get() : bound.view2D.Get();
+			if (view) {
+				context_->PSSetShaderResources(i, 1, &view);
+				bound.isArray = wantArray;
+			}
+		}
+	}
+}
+
+void D3D11DrawContext::SetPSResource(int slot, ID3D11ShaderResourceView *view2D, ID3D11ShaderResourceView *viewArray, bool bindArray) {
+	BoundResource &bound = boundResources_[slot];
+	bound.view2D = view2D;
+	bound.viewArray = viewArray;
+	bound.isArray = bindArray && viewArray;
+	ID3D11ShaderResourceView *view = bound.isArray ? viewArray : view2D;
+	context_->PSSetShaderResources(slot, 1, &view);
+}
+
+ID3D11VertexShader *D3D11DrawContext::StereoVertexShader(D3D11ShaderModule *module) {
+	if (!module || module->stereoVS || module->stereoFailed) {
+		return module ? module->stereoVS.Get() : nullptr;
+	}
+	if (module->source.empty()) {
+		// Not from ShaderWriter, so it can't draw to a layered target.
+		module->stereoFailed = true;
+		return nullptr;
+	}
+	static const D3D_SHADER_MACRO defines[] = { { "PPSSPP_STEREO", "1" }, { nullptr, nullptr } };
+	ComPtr<ID3DBlob> compiledCode;
+	ComPtr<ID3DBlob> errorMsgs;
+	// Outputting SV_RenderTargetArrayIndex from a vertex shader takes shader model 5.
+	HRESULT result = ptr_D3DCompile(module->source.c_str(), module->source.size(), nullptr, defines, nullptr, "main", "vs_5_0", D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY, 0, &compiledCode, &errorMsgs);
+	if (SUCCEEDED(result) && compiledCode) {
+		result = device_->CreateVertexShader(compiledCode->GetBufferPointer(), compiledCode->GetBufferSize(), nullptr, &module->stereoVS);
+	}
+	if (FAILED(result) || !module->stereoVS) {
+		ERROR_LOG(Log::G3D, "Failed compiling the stereo version of %s: %s", module->tag_.c_str(), errorMsgs ? (const char *)errorMsgs->GetBufferPointer() : "");
+		module->stereoFailed = true;
+	}
+	return module->stereoVS.Get();
+}
+
+ID3D11ShaderResourceView *D3D11DrawContext::LayerArrayView(D3D11Framebuffer *fb, bool depth, int layer) {
+	ComPtr<ID3D11ShaderResourceView> &view = fb->layerArraySRView[depth][layer];
+	ID3D11Texture2D *tex = depth ? fb->depthStencilTex.Get() : fb->colorTex.Get();
+	if (!view && tex) {
+		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+		desc.Format = depth ? DXGI_FORMAT_R24_UNORM_X8_TYPELESS : fb->colorFormat;
+		desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		desc.Texture2DArray.MostDetailedMip = 0;
+		desc.Texture2DArray.MipLevels = 1;
+		desc.Texture2DArray.FirstArraySlice = layer;
+		desc.Texture2DArray.ArraySize = 1;
+		device_->CreateShaderResourceView(tex, &desc, &view);
+	}
+	return view.Get();
+}
+
+ID3D11ShaderResourceView *D3D11DrawContext::LayerCopyView(D3D11Framebuffer *fb, bool depth, int layer) {
+	ID3D11Texture2D *src = depth ? fb->depthStencilTex.Get() : fb->colorTex.Get();
+	if (!src) {
+		return nullptr;
+	}
+	ComPtr<ID3D11Texture2D> &copy = fb->layerCopyTex[depth];
+	ComPtr<ID3D11ShaderResourceView> &view = fb->layerCopySRView[depth];
+	if (!copy) {
+		D3D11_TEXTURE2D_DESC desc;
+		src->GetDesc(&desc);
+		desc.ArraySize = 1;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		if (FAILED(device_->CreateTexture2D(&desc, nullptr, &copy))) {
+			return nullptr;
+		}
+		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+		viewDesc.Format = depth ? DXGI_FORMAT_R24_UNORM_X8_TYPELESS : fb->colorFormat;
+		viewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		viewDesc.Texture2D.MostDetailedMip = 0;
+		viewDesc.Texture2D.MipLevels = 1;
+		device_->CreateShaderResourceView(copy.Get(), &viewDesc, &view);
+	}
+	// Depth can only be copied a whole subresource at a time, so color is too.
+	context_->CopySubresourceRegion(copy.Get(), 0, 0, 0, 0, src, D3D11CalcSubresource(0, layer, 1), nullptr);
+	return view.Get();
 }
 
 class D3D11Buffer : public Buffer {
@@ -1386,12 +1571,20 @@ void D3D11DrawContext::BindIndexBuffer(Buffer *indexBuffer, int offset) {
 
 void D3D11DrawContext::Draw(int vertexCount, int offset) {
 	ApplyCurrentState();
-	context_->Draw(vertexCount, offset);
+	if (curRTLayers_ > 1) {
+		context_->DrawInstanced(vertexCount, curRTLayers_, offset, 0);
+	} else {
+		context_->Draw(vertexCount, offset);
+	}
 }
 
 void D3D11DrawContext::DrawIndexed(int indexCount, int offset) {
 	ApplyCurrentState();
-	context_->DrawIndexed(indexCount, offset, 0);
+	if (curRTLayers_ > 1) {
+		context_->DrawIndexedInstanced(indexCount, curRTLayers_, offset, 0, 0);
+	} else {
+		context_->DrawIndexed(indexCount, offset, 0);
+	}
 }
 
 void D3D11DrawContext::DrawUP(const void *vdata, int vertexCount) {
@@ -1497,18 +1690,18 @@ uint32_t D3D11DrawContext::GetDataFormatSupport(DataFormat fmt) const {
 
 Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	HRESULT hr;
-	D3D11Framebuffer *fb = new D3D11Framebuffer(desc.width, desc.height, desc.z_stencil);
+	D3D11Framebuffer *fb = new D3D11Framebuffer(desc.width, desc.height, desc.numLayers, desc.z_stencil);
 
-	// We don't (yet?) support multiview for D3D11. Not sure if there's a way to do it.
-	// Texture arrays are supported but we don't have any other use cases yet.
-	_dbg_assert_(desc.numLayers == 1);
+	// Two layers for stereo, drawn to an instance per layer.
+	_dbg_assert_(desc.numLayers == 1 || (desc.numLayers == 2 && caps_.multiViewSupported));
+	const bool layered = desc.numLayers > 1;
 
 	fb->colorFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 	D3D11_TEXTURE2D_DESC descColor{};
 	descColor.Width = desc.width;
 	descColor.Height = desc.height;
 	descColor.MipLevels = 1;
-	descColor.ArraySize = 1;
+	descColor.ArraySize = desc.numLayers;
 	descColor.Format = fb->colorFormat;
 	descColor.SampleDesc.Count = 1;
 	descColor.SampleDesc.Quality = 0;
@@ -1538,7 +1731,7 @@ Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 		descDepth.Width = desc.width;
 		descDepth.Height = desc.height;
 		descDepth.MipLevels = 1;
-		descDepth.ArraySize = 1;
+		descDepth.ArraySize = desc.numLayers;
 		descDepth.Format = DXGI_FORMAT_R24G8_TYPELESS;  // so we can create an R24X8 view of it.
 		descDepth.SampleDesc.Count = 1;
 		descDepth.SampleDesc.Quality = 0;
@@ -1553,8 +1746,15 @@ Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 		}
 		D3D11_DEPTH_STENCIL_VIEW_DESC descDSV{};
 		descDSV.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-		descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-		descDSV.Texture2D.MipSlice = 0;
+		if (layered) {
+			descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+			descDSV.Texture2DArray.MipSlice = 0;
+			descDSV.Texture2DArray.FirstArraySlice = 0;
+			descDSV.Texture2DArray.ArraySize = desc.numLayers;
+		} else {
+			descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+			descDSV.Texture2D.MipSlice = 0;
+		}
 		hr = device_->CreateDepthStencilView(fb->depthStencilTex.Get(), &descDSV, &fb->depthStencilRTView);
 		if (FAILED(hr)) {
 			delete fb;
@@ -1563,9 +1763,17 @@ Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC depthViewDesc{};
 		depthViewDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-		depthViewDesc.Texture2D.MostDetailedMip = 0;
-		depthViewDesc.Texture2D.MipLevels = 1;
-		depthViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		if (layered) {
+			depthViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+			depthViewDesc.Texture2DArray.MostDetailedMip = 0;
+			depthViewDesc.Texture2DArray.MipLevels = 1;
+			depthViewDesc.Texture2DArray.FirstArraySlice = 0;
+			depthViewDesc.Texture2DArray.ArraySize = desc.numLayers;
+		} else {
+			depthViewDesc.Texture2D.MostDetailedMip = 0;
+			depthViewDesc.Texture2D.MipLevels = 1;
+			depthViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		}
 		hr = device_->CreateShaderResourceView(fb->depthStencilTex.Get(), &depthViewDesc, &fb->depthSRView);
 		if (FAILED(hr)) {
 			WARN_LOG(Log::G3D, "Failed to create SRV for depth buffer.");
@@ -1589,20 +1797,16 @@ Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 }
 
 void D3D11DrawContext::BindTextures(int start, int count, Texture **textures, TextureBindFlags flags) {
-	// Collect the resource views from the textures.
-	ID3D11ShaderResourceView *views[MAX_BOUND_TEXTURES];
-	_assert_(start + count <= ARRAY_SIZE(views));
+	_assert_(start + count <= MAX_BOUND_TEXTURES);
 	for (int i = 0; i < count; i++) {
 		D3D11Texture *tex = (D3D11Texture *)textures[i];
-		views[i] = tex ? tex->View() : nullptr;
+		// Stereo shaders sample them as arrays.
+		SetPSResource(start + i, tex ? tex->View() : nullptr, tex && caps_.multiViewSupported ? tex->ArrayView(device_.Get()) : nullptr, false);
 	}
-	context_->PSSetShaderResources(start, count, views);
 }
 
 void D3D11DrawContext::BindNativeTexture(int index, void *nativeTexture) {
-	// Collect the resource views from the textures.
-	ID3D11ShaderResourceView *view = (ID3D11ShaderResourceView *)nativeTexture;
-	context_->PSSetShaderResources(index, 1, &view);
+	SetPSResource(index, (ID3D11ShaderResourceView *)nativeTexture, nullptr, false);
 }
 
 void D3D11DrawContext::BindSamplerStates(int start, int count, SamplerState **states) {
@@ -1693,10 +1897,19 @@ void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x
 	}
 	_assert_(srcTex && dstTex);
 
+	// Stereo framebuffers have a layer per eye. Copies between those and single layer ones take the first.
+	const int layers = std::min(src->Layers(), dst->Layers());
+
 	// TODO: Check for level too!
 	if (width == src->Width() && width == dst->Width() && height == src->Height() && height == dst->Height() && x == 0 && y == 0 && z == 0 && dstX == 0 && dstY == 0 && dstZ == 0) {
-		// Don't need to specify region. This might be faster, too.
-		context_->CopyResource(dstTex.Get(), srcTex.Get());
+		if (src->Layers() == dst->Layers()) {
+			// Don't need to specify region. This might be faster, too.
+			context_->CopyResource(dstTex.Get(), srcTex.Get());
+		} else {
+			for (int layer = 0; layer < layers; layer++) {
+				context_->CopySubresourceRegion(dstTex.Get(), D3D11CalcSubresource(dstLevel, layer, 1), 0, 0, 0, srcTex.Get(), D3D11CalcSubresource(level, layer, 1), nullptr);
+			}
+		}
 		return;
 	}
 
@@ -1720,7 +1933,9 @@ void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x
 			height = src->Height() - y;
 		}
 		D3D11_BOX srcBox{ (UINT)x, (UINT)y, (UINT)z, (UINT)(x + width), (UINT)(y + height), (UINT)(z + depth) };
-		context_->CopySubresourceRegion(dstTex.Get(), dstLevel, dstX, dstY, dstZ, srcTex.Get(), level, &srcBox);
+		for (int layer = 0; layer < layers; layer++) {
+			context_->CopySubresourceRegion(dstTex.Get(), D3D11CalcSubresource(dstLevel, layer, 1), dstX, dstY, dstZ, srcTex.Get(), D3D11CalcSubresource(level, layer, 1), &srcBox);
+		}
 	}
 }
 
@@ -1807,9 +2022,10 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelB
 		break;
 	case Aspect::DEPTH_BIT:
 	case Aspect::STENCIL_BIT:
-		// For depth/stencil buffers, we can't reliably copy subrectangles, so just copy the whole resource.
+		// For depth/stencil buffers, we can't reliably copy subrectangles, so just copy the whole resource
+		// (its first layer, with stereo).
 		_assert_(fb);  // Can't copy depth/stencil from backbuffer. Shouldn't happen thanks to checks above.
-		context_->CopyResource(packTex.Get(), fb->depthStencilTex.Get());
+		context_->CopySubresourceRegion(packTex.Get(), 0, 0, 0, 0, fb->depthStencilTex.Get(), 0, nullptr);
 		srcFormat = Draw::DataFormat::D24_S8;
 		break;
 	default:
@@ -1895,8 +2111,7 @@ void D3D11DrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 		} else {
 			// It's not uncommon that the first slot happens to have the new render target bound as a texture,
 			// so unbind to make the validation layers happy.
-			ID3D11ShaderResourceView *empty[1] = {};
-			context_->PSSetShaderResources(0, ARRAY_SIZE(empty), empty);
+			SetPSResource(0, nullptr, nullptr, false);
 			context_->OMSetRenderTargets(1, fb->colorRTView.GetAddressOf(), fb->depthStencilRTView.Get());
 			curRenderTargetView_ = fb->colorRTView;
 			curDepthStencilView_ = fb->depthStencilRTView;
@@ -1904,6 +2119,7 @@ void D3D11DrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 			curRTHeight_ = fb->Height();
 		}
 		curRenderTarget_ = fb;
+		curRTLayers_ = fb->Layers();
 	} else {
 		if (curRenderTargetView_.Get() == bbRenderTargetView_ && curDepthStencilView_ == bbDepthStencilView_) {
 			// No need to switch, but let's fallthrough to clear!
@@ -1915,6 +2131,7 @@ void D3D11DrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 			curRTHeight_ = bbHeight_;
 		}
 		curRenderTarget_ = nullptr;
+		curRTLayers_ = 1;
 	}
 	if (rp.color == RPAction::CLEAR && curRenderTargetView_) {
 		float cv[4]{};
@@ -1940,19 +2157,22 @@ void D3D11DrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 
 void D3D11DrawContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspect channelBit, int layer) {
 	_dbg_assert_(binding < MAX_BOUND_TEXTURES);
-	_dbg_assert_(layer == ALL_LAYERS || layer == 0);  // No multiple layer support on D3D
 	D3D11Framebuffer *fb = (D3D11Framebuffer *)fbo;
-	switch (channelBit) {
-	case Aspect::COLOR_BIT:
-		context_->PSSetShaderResources(binding, 1, fb->colorSRView.GetAddressOf());
-		break;
-	case Aspect::DEPTH_BIT:
-		if (fb->depthSRView) {
-			context_->PSSetShaderResources(binding, 1, fb->depthSRView.GetAddressOf());
-		}
-		break;
-	default:
-		break;
+	if (channelBit != Aspect::COLOR_BIT && channelBit != Aspect::DEPTH_BIT) {
+		return;
+	}
+	const bool depth = channelBit == Aspect::DEPTH_BIT;
+	ID3D11ShaderResourceView *view = depth ? fb->depthSRView.Get() : fb->colorSRView.Get();
+	if (!view) {
+		return;
+	}
+	if (fb->Layers() == 1) {
+		SetPSResource(binding, view, caps_.multiViewSupported ? LayerArrayView(fb, depth, 0) : nullptr, false);
+	} else if (layer == ALL_LAYERS) {
+		// Stereo shaders, which sample their eye's layer.
+		SetPSResource(binding, nullptr, view, true);
+	} else {
+		SetPSResource(binding, LayerCopyView(fb, depth, layer), LayerArrayView(fb, depth, layer), false);
 	}
 }
 

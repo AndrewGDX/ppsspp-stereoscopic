@@ -108,7 +108,8 @@ bool TestCompileShader(const char *buffer, ShaderLanguage lang, ShaderStage stag
 	{
 		const char *programType = nullptr;
 		switch (stage) {
-		case ShaderStage::Vertex: programType = "vs_4_0"; break;
+		// Picking the render target layer (stereo) takes shader model 5, as in CreateVertexShaderD3D11.
+		case ShaderStage::Vertex: programType = strstr(buffer, "SV_RenderTargetArrayIndex") ? "vs_5_0" : "vs_4_0"; break;
 		case ShaderStage::Fragment: programType = "ps_4_0"; break;
 		default:
 			*errorMessage = "Unknown shader stage";
@@ -361,7 +362,8 @@ const ShaderLanguage languages[] = {
 const int numLanguages = ARRAY_SIZE(languages);
 
 // vr: GPU_USE_VIRTUAL_REALITY is set, which only Vulkan uses.
-bool TestVertexShaders(bool vr) {
+// stereoscopy: GPU_USE_STEREOSCOPY is set, which Vulkan, Metal (through Vulkan GLSL) and D3D11 support.
+bool TestVertexShaders(bool vr, bool stereoscopy) {
 	char *buffer[numLanguages];
 
 	for (int i = 0; i < numLanguages; i++) {
@@ -389,12 +391,16 @@ bool TestVertexShaders(bool vr) {
 		if (id.Bit(VS_BIT_VERTEX_RANGE_CULLING)) {
 			continue;
 		}
+		if (stereoscopy) {
+			id.SetBit(VS_BIT_SIMPLE_STEREO);
+		}
 
 		bool generateSuccess[numLanguages]{};
 		std::string genErrorString[numLanguages];
 
 		for (int j = 0; j < numLanguages; j++) {
-			if (vr && languages[j] != ShaderLanguage::GLSL_VULKAN) {
+			if ((vr && languages[j] != ShaderLanguage::GLSL_VULKAN) ||
+				(stereoscopy && languages[j] != ShaderLanguage::GLSL_VULKAN && languages[j] != ShaderLanguage::HLSL_D3D11)) {
 				buffer[j][0] = '\0';
 				continue;
 			}
@@ -543,14 +549,14 @@ bool TestShaderGenerators() {
 		return false;
 	}
 
-	if (!TestVertexShaders(false)) {
+	if (!TestVertexShaders(false, false)) {
 		return false;
 	}
 
 	// Again with the VR uniforms and the per-eye view (with VS_BIT_SIMPLE_STEREO on Vulkan).
 	const u32 oldFlags = gstate_c.GetUseFlags();
 	gstate_c.SetUseFlags(oldFlags | GPU_USE_VIRTUAL_REALITY);
-	const bool vrResult = TestVertexShaders(true);
+	const bool vrResult = TestVertexShaders(true, false);
 	gstate_c.SetUseFlags(oldFlags);
 	if (!vrResult) {
 		return false;
@@ -561,6 +567,14 @@ bool TestShaderGenerators() {
 	const bool screenLinearResult = TestFragmentShaders() && TestVertexShaders(false);
 	gstate_c.SetUseFlags(oldFlags);
 	if (!screenLinearResult) {
+		return false;
+	}
+
+	// And with stereoscopy, which shifts each eye and (on D3D11) picks the layer per instance.
+	gstate_c.SetUseFlags(oldFlags | GPU_USE_STEREOSCOPY | GPU_USE_SINGLE_PASS_STEREO | GPU_USE_FRAMEBUFFER_ARRAYS);
+	const bool stereoResult = TestVertexShaders(false, true);
+	gstate_c.SetUseFlags(oldFlags);
+	if (!stereoResult) {
 		return false;
 	}
 

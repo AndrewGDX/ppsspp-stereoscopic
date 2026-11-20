@@ -41,6 +41,7 @@ static constexpr int MAX_BOUND_TEXTURES = 8;
 // https://tedwvc.wordpress.com/2014/01/01/how-to-target-xp-with-vc2012-or-vc2013-and-continue-to-use-the-windows-8-x-sdk/
 
 class D3D11Pipeline;
+class D3D11ShaderModule;
 class D3D11BlendState;
 class D3D11DepthStencilState;
 class D3D11SamplerState;

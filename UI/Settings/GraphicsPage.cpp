@@ -35,6 +35,7 @@
 #include "Core/KeyMap.h"
 #include "Core/System.h"
 #include "GPU/Common/PostShader.h"
+#include "GPU/Common/PresentationCommon.h"
 #include "UI/DevScreens.h"
 #include "UI/DisplayLayoutScreen.h"
 #include "UI/MiscScreens.h"
@@ -309,6 +310,39 @@ void BuildGraphicsSettings(SettingsPage *page) {
 	page->Setting(&g_Config.bRenderDuplicateFrames).EnabledFunc([] {
 		return !g_Config.bSkipBufferEffects && g_Config.iFrameSkip == 0;
 	}).Hint({I18NCat::GRAPHICS, "RenderDuplicateFrames Tip", "Can make framerate smoother in games that run at lower framerates"});
+
+	if (deviceType != DEVICE_TYPE_VR) {
+		page->Header("Stereoscopy");
+		// The backend doesn't change without a restart, but software rendering and skip buffer effects can.
+		auto stereoscopyAvailable = [draw]() {
+			return StereoscopySupported(draw) && !g_Config.bSkipBufferEffects;
+		};
+		auto stereoscopyOn = [stereoscopyAvailable]() {
+			return stereoscopyAvailable() && g_Config.iStereoscopyMode != (int)StereoscopyMode::OFF;
+		};
+		auto uiDetectionOn = [stereoscopyOn]() {
+			return stereoscopyOn() && g_Config.iStereoscopyUIDetectionMode != (int)StereoscopyUIDetection::OFF;
+		};
+		SettingItem &mode = page->Setting(&g_Config.iStereoscopyMode).EnabledFunc(stereoscopyAvailable).OnChange([](UI::EventParams &) {
+			// Takes effect in the running game, which recreates its framebuffers if stereo turns on or off.
+			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
+		});
+		if (!StereoscopySupported(draw) && !g_Config.bSoftwareRendering) {
+			mode.Hint({I18NCat::GRAPHICS, "StereoscopyUnsupported Tip", "Needs the Vulkan, Metal or Direct3D 11 backend"});
+		}
+		page->Setting(&g_Config.iStereoscopyDominantEye).EnabledFunc(stereoscopyOn);
+		page->Setting(&g_Config.bStereoscopySwapEyes).EnabledFunc(stereoscopyOn);
+		page->Setting(&g_Config.fStereoscopySeparation).EnabledFunc(stereoscopyOn);
+		page->Setting(&g_Config.fStereoscopyConvergence).EnabledFunc(stereoscopyOn).Hint({I18NCat::GRAPHICS, "StereoscopyConvergence Tip", "The distance that appears at screen depth, in the game's units. Varies a lot between games."});
+		page->Setting(&g_Config.iStereoscopyUIDetectionMode).EnabledFunc(stereoscopyOn);
+		page->Setting(&g_Config.iStereoscopyUIDepth).EnabledFunc(uiDetectionOn).LiveUpdate();
+		page->Setting(&g_Config.iStereoscopySecondLayerParallax).EnabledFunc(uiDetectionOn).LiveUpdate();
+		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([uiDetectionOn]() {
+			// Only unsafe and advanced detection look at the depth.
+			const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
+			return uiDetectionOn() && (detection == StereoscopyUIDetection::UNSAFE || detection == StereoscopyUIDetection::ADVANCED);
+		}).LiveUpdate();
+	}
 
 	page->Header("Frame Rate Control");
 

@@ -74,3 +74,13 @@ Post shaders, the overlay and Cardboard VR are off while stereoscopy is on.
 - The right eye and the layout need the real app: a backbuffer screenshot through the WebSocket debugger
   (`wsdbg`'s `:screenshot`). Use a memstick of its own (`--memstick`), as the app saves appended settings.
 - `ShaderGenerators` has a stereoscopy pass (Vulkan GLSL, and HLSL on Windows).
+
+## Known issues
+
+- **AMD GPUs in Intel Macs lose depth writes to layered targets.** On a Radeon Pro Vega 20 (macOS 15), 9 of
+  the 43 frame dumps differ from mono with separation 0: a scattering of pixels (a different set each run)
+  keeps its old depth after a clear-mode draw, and later depth tests fail (FlatOut loses the car). Metal
+  and Vulkan through MoltenVK fail the same way, as did the developer option this replaced, while the
+  Intel UHD 630 in the same Mac matches mono in all 43. Clearing each slice in a pass of its own, keeping
+  depth loaded and stored, a depth format without stencil and turning off lossless compression didn't help.
+  Games tested in play rendered correctly.

@@ -151,6 +151,9 @@ struct MetalTranslatedShader {
 	uint32_t bufferMask = 0;
 	// Fragment shaders: the shader reads the framebuffer (programmable blending).
 	bool readsFramebuffer = false;
+	// Fragment shaders: gl_ViewIndex, from the layer. Only a multiview vertex shader outputs that, so it's
+	// paired with one even for a target with a single layer.
+	bool readsViewIndex = false;
 };
 
 // Shaders that use gl_ViewIndex are translated for multiview (the view comes from the instance, see

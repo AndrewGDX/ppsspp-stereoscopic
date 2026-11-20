@@ -200,6 +200,7 @@ bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslat
 			msl.add_msl_resource_binding(binding);
 		}
 		out->readsFramebuffer = !resources.subpass_inputs.empty();
+		out->readsViewIndex = options.multiview && stage == ShaderStage::Fragment;
 
 		out->msl = msl.compile();
 		out->entryPoint = msl.get_cleansed_entry_point_name("main", model);

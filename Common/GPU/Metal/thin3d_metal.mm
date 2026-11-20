@@ -295,7 +295,7 @@ MetalPipelineState *MetalPipeline::GetPSO(id<MTLDevice> device, const MetalRende
 	MTLRenderPipelineDescriptor *desc = [MTLRenderPipelineDescriptor new];
 	desc.label = [NSString stringWithUTF8String:tag.c_str()];
 	desc.vertexFunction = vs->function;
-	if (format.layers > 1) {
+	if (format.layers > 1 || (fs && fs->info.readsViewIndex)) {
 		desc.vertexFunction = vs->MultiviewFunction(device);
 		if (!desc.vertexFunction) {
 			psos[key] = nil;

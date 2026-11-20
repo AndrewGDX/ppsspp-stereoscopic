@@ -53,6 +53,8 @@ enum {
 	METAL_VERTEX_BUFFER_INDEX1 = 17,
 	// Push constants (only compute shaders have them) go in a buffer of their own, set with setBytes.
 	METAL_PUSH_CONSTANT_INDEX = 15,
+	// The first view and the view count of a multiview shader (SPIRV-Cross's spvViewMask), set per pass.
+	METAL_VIEW_MASK_INDEX = 24,
 	METAL_MAX_TEXTURES = 8,
 	METAL_MAX_BUFFERS = 8,
 };
@@ -109,6 +111,8 @@ struct MetalRenderPassDesc {
 	double clearDepth = 0.0;
 	uint32_t clearStencil = 0;
 	bool depthMemoryless = false;
+	// Two for stereo, where the textures are arrays and every draw runs once per layer (an instance each).
+	int layers = 1;
 	const char *tag = nullptr;
 };
 
@@ -118,9 +122,13 @@ struct MetalRenderTargetFormat {
 	MTLPixelFormat depth = MTLPixelFormatInvalid;
 	MTLPixelFormat stencil = MTLPixelFormatInvalid;
 	int sampleCount = 1;
+	// Pipelines for a layered target use the multiview version of the vertex shader.
+	int layers = 1;
 
 	uint32_t Key() const {
-		return (uint32_t)color | ((uint32_t)depth << 10) | ((uint32_t)stencil << 20) | ((uint32_t)(sampleCount - 1) << 30);
+		// The pixel formats we use are all below 512, and the sample count a power of two up to 8.
+		uint32_t samplesLog2 = sampleCount >= 8 ? 3 : sampleCount >= 4 ? 2 : sampleCount >= 2 ? 1 : 0;
+		return (uint32_t)color | ((uint32_t)depth << 9) | ((uint32_t)stencil << 18) | (samplesLog2 << 27) | ((uint32_t)(layers - 1) << 29);
 	}
 };
 
@@ -145,7 +153,9 @@ struct MetalTranslatedShader {
 	bool readsFramebuffer = false;
 };
 
-bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslatedShader *out, std::string *errorMessage);
+// Shaders that use gl_ViewIndex are translated for multiview (the view comes from the instance, see
+// METAL_VIEW_MASK_INDEX), and with multiview set, so is a vertex shader that doesn't, so it can draw to a layered target.
+bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslatedShader *out, std::string *errorMessage, bool multiview = false);
 id<MTLFunction> CreateMetalFunction(id<MTLDevice> device, const MetalTranslatedShader &shader, const char *tag, std::string *errorMessage);
 
 // Compiling MSL takes long (around 100ms the first time), so it's done off the emu thread, on a thread of its own.
@@ -253,6 +263,7 @@ struct MetalRecordedPass {
 	double clearDepth;
 	uint32_t clearStencil;
 	MTLStoreAction depthStore;
+	int layers;
 	bool usesDepth;  // Some draw tested or wrote depth or stencil.
 	bool depthMemoryless;
 	MetalSwapchain *swapchain;  // Renders to this instead of color.
@@ -277,7 +288,9 @@ struct MetalRecordedCopy {
 	uint32_t bytesPerImage;
 	uint32_t srcLevel;
 	uint32_t dstLevel;
+	uint32_t srcSlice;
 	uint32_t dstSlice;
+	uint32_t slices;  // Texture to texture copies, from srcSlice and dstSlice on.
 	MTLOrigin srcOrigin;
 	MTLOrigin dstOrigin;
 	MTLSize size;
@@ -446,9 +459,10 @@ public:
 	// Blits. These end the current render pass (it resumes with the next draw). With upload set, the copy
 	// goes in the upload command buffer, which runs before everything else in the current submit. Use that
 	// only for resources that nothing earlier in the frame has used (like new textures).
+	// Copies all the array slices the two have.
 	void CopyTexture(__unsafe_unretained id<MTLTexture> src, int srcLevel, MTLOrigin srcOrigin, MTLSize size, __unsafe_unretained id<MTLTexture> dst, int dstLevel, MTLOrigin dstOrigin);
 	// With srcSwapchain set, copies from its drawable (or offscreen texture) instead of src.
-	void CopyTextureToBuffer(__unsafe_unretained id<MTLTexture> src, int level, MTLOrigin origin, MTLSize size, __unsafe_unretained id<MTLBuffer> dst, uint32_t offset, uint32_t bytesPerRow, uint32_t bytesPerImage, MTLBlitOption options, MetalSwapchain *srcSwapchain = nullptr);
+	void CopyTextureToBuffer(__unsafe_unretained id<MTLTexture> src, int level, MTLOrigin origin, MTLSize size, __unsafe_unretained id<MTLBuffer> dst, uint32_t offset, uint32_t bytesPerRow, uint32_t bytesPerImage, MTLBlitOption options, MetalSwapchain *srcSwapchain = nullptr, int slice = 0);
 	void CopyBufferToTexture(__unsafe_unretained id<MTLBuffer> src, uint32_t offset, uint32_t bytesPerRow, uint32_t bytesPerImage, MTLSize size, __unsafe_unretained id<MTLTexture> dst, int slice, int level, MTLOrigin origin, MTLBlitOption options, bool upload);
 	void GenerateMips(__unsafe_unretained id<MTLTexture> texture, bool upload);
 	// Runs in the upload command buffer, in order with the upload copies. Fill in the returned dispatch.
@@ -458,6 +472,8 @@ public:
 
 	// A 2D array view of the texture, cached on the texture. For shaders that declare array samplers.
 	id<MTLTexture> ArrayView(id<MTLTexture> texture);
+	// A 2D view of one slice of an array texture, cached on the texture.
+	id<MTLTexture> SliceView(id<MTLTexture> texture, int slice);
 
 private:
 	void StartRenderPass();

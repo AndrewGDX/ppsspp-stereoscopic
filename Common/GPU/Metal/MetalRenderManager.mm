@@ -107,7 +107,7 @@ const char *MetalPixelFormatToString(MTLPixelFormat fmt) {
 	}
 }
 
-bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslatedShader *out, std::string *errorMessage) {
+bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslatedShader *out, std::string *errorMessage, bool multiview) {
 	VkShaderStageFlagBits vkStage;
 	spv::ExecutionModel model;
 	switch (stage) {
@@ -136,6 +136,10 @@ bool TranslateVulkanGLSLToMSL(ShaderStage stage, const char *glsl, MetalTranslat
 		// Point size is only written for point primitives, which we don't draw (they're expanded to quads).
 		options.enable_point_size_builtin = false;
 		options.use_framebuffer_fetch_subpasses = true;
+		// Metal has no multiview. SPIRV-Cross makes each view an instance, which the vertex shader sends to
+		// its layer, and the fragment shader reads the layer back as the view index.
+		options.multiview = multiview || strstr(glsl, "gl_ViewIndex") != nullptr;
+		options.view_mask_buffer_index = METAL_VIEW_MASK_INDEX;
 		msl.set_msl_options(options);
 
 		spirv_cross::CompilerGLSL::Options common = msl.get_common_options();
@@ -535,6 +539,7 @@ void MetalRenderManager::BindBackbufferPass(MetalSwapchain *swapchain, MTLLoadAc
 	curFormat_.depth = swapchain->depth ? MTLPixelFormatDepth32Float_Stencil8 : MTLPixelFormatInvalid;
 	curFormat_.stencil = curFormat_.depth;
 	curFormat_.sampleCount = 1;
+	curFormat_.layers = 1;
 	passWidth_ = swapchain->width;
 	passHeight_ = swapchain->height;
 }
@@ -562,6 +567,7 @@ void MetalRenderManager::BindRenderPass(const MetalRenderPassDesc &desc) {
 	curFormat_.stencil = (curFormat_.depth == MTLPixelFormatDepth32Float_Stencil8) ? curFormat_.depth : MTLPixelFormatInvalid;
 	id<MTLTexture> msaaTex = desc.msaaColor ? desc.msaaColor : desc.msaaDepth;
 	curFormat_.sampleCount = msaaTex ? (int)msaaTex.sampleCount : 1;
+	curFormat_.layers = desc.layers;
 }
 
 void MetalRenderManager::UnbindRenderPass() {
@@ -611,6 +617,7 @@ void MetalRenderManager::StartRenderPass() {
 	rp.clearStencil = pass_.clearStencil;
 	rp.depthMemoryless = pass_.depthMemoryless;
 	rp.depthStore = MTLStoreActionStore;
+	rp.layers = passSwapchain_ ? 1 : pass_.layers;
 	rp.usesDepth = false;
 	if (pass_.tag) {
 		rp.tag = pass_.tag;
@@ -687,14 +694,16 @@ void MetalRenderManager::CopyTexture(__unsafe_unretained id<MTLTexture> src, int
 	copy.srcOrigin = srcOrigin;
 	copy.dstOrigin = dstOrigin;
 	copy.size = size;
+	copy.slices = (uint32_t)std::min(src.arrayLength, dst.arrayLength);
 }
 
-void MetalRenderManager::CopyTextureToBuffer(__unsafe_unretained id<MTLTexture> src, int level, MTLOrigin origin, MTLSize size, __unsafe_unretained id<MTLBuffer> dst, uint32_t offset, uint32_t bytesPerRow, uint32_t bytesPerImage, MTLBlitOption options, MetalSwapchain *srcSwapchain) {
+void MetalRenderManager::CopyTextureToBuffer(__unsafe_unretained id<MTLTexture> src, int level, MTLOrigin origin, MTLSize size, __unsafe_unretained id<MTLBuffer> dst, uint32_t offset, uint32_t bytesPerRow, uint32_t bytesPerImage, MTLBlitOption options, MetalSwapchain *srcSwapchain, int slice) {
 	MetalRecordedCopy &copy = RecordCopy(false);
 	copy.type = MetalCopyType::TEXTURE_TO_BUFFER;
 	copy.srcSwapchain = srcSwapchain;
 	copy.src = (__bridge void *)src;
 	copy.dst = (__bridge void *)dst;
+	copy.srcSlice = slice;
 	copy.srcLevel = level;
 	copy.srcOrigin = origin;
 	copy.size = size;
@@ -1203,6 +1212,9 @@ void MetalRenderManager::ReplayPass(const MetalCommandChunk &chunk, MetalStep &s
 		return;
 	}
 	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+	if (pass.layers > 1) {
+		rp.renderTargetArrayLength = pass.layers;
+	}
 	if (color) {
 		id<MTLTexture> msaaColor = (__bridge id<MTLTexture>)pass.msaaColor;
 		rp.colorAttachments[0].loadAction = pass.colorLoad;
@@ -1265,6 +1277,11 @@ void MetalRenderManager::ReplayPass(const MetalCommandChunk &chunk, MetalStep &s
 	if (!pass.tag.empty()) {
 		enc.label = [NSString stringWithUTF8String:pass.tag.c_str()];
 	}
+	// For multiview shaders: views from 0, one per layer. Each draw is an instance per view.
+	const uint32_t viewMask[2] = { 0, (uint32_t)pass.layers };
+	[enc setVertexBytes:viewMask length:sizeof(viewMask) atIndex:METAL_VIEW_MASK_INDEX];
+	[enc setFragmentBytes:viewMask length:sizeof(viewMask) atIndex:METAL_VIEW_MASK_INDEX];
+	const NSUInteger instances = pass.layers;
 
 	const std::vector<MetalCommand> &commands = chunk.commands;
 	// Draws with a pipeline that failed to compile are dropped.
@@ -1296,10 +1313,10 @@ void MetalRenderManager::ReplayPass(const MetalCommandChunk &chunk, MetalStep &s
 			case MetalCmd::FRAGMENT_BUFFER_OFFSET: [enc setFragmentBufferOffset:c.bind.offset atIndex:c.index]; break;
 			case MetalCmd::FRAGMENT_TEXTURE: [enc setFragmentTexture:(__bridge id<MTLTexture>)c.bind.obj atIndex:c.index]; break;
 			case MetalCmd::FRAGMENT_SAMPLER: [enc setFragmentSamplerState:(__bridge id<MTLSamplerState>)c.bind.obj atIndex:c.index]; break;
-			case MetalCmd::DRAW: if (pipelineOK) [enc drawPrimitives:(MTLPrimitiveType)c.prim vertexStart:c.draw.start vertexCount:c.draw.count]; break;
+			case MetalCmd::DRAW: if (pipelineOK) [enc drawPrimitives:(MTLPrimitiveType)c.prim vertexStart:c.draw.start vertexCount:c.draw.count instanceCount:instances]; break;
 			case MetalCmd::DRAW_INDEXED:
 				if (pipelineOK) [enc drawIndexedPrimitives:(MTLPrimitiveType)c.prim indexCount:c.drawIndexed.count indexType:MTLIndexTypeUInt16
-					indexBuffer:(__bridge id<MTLBuffer>)c.drawIndexed.buffer indexBufferOffset:c.drawIndexed.offset];
+					indexBuffer:(__bridge id<MTLBuffer>)c.drawIndexed.buffer indexBufferOffset:c.drawIndexed.offset instanceCount:instances];
 				break;
 			default:
 				break;
@@ -1325,8 +1342,10 @@ void MetalRenderManager::ReplayCopy(const MetalCommandChunk &chunk, const MetalR
 	}
 	switch (copy.type) {
 	case MetalCopyType::TEXTURE_TO_TEXTURE:
-		[blit copyFromTexture:(__bridge id<MTLTexture>)copy.src sourceSlice:0 sourceLevel:copy.srcLevel sourceOrigin:copy.srcOrigin sourceSize:copy.size
-			toTexture:(__bridge id<MTLTexture>)copy.dst destinationSlice:0 destinationLevel:copy.dstLevel destinationOrigin:copy.dstOrigin];
+		for (uint32_t slice = 0; slice < std::max(copy.slices, 1U); slice++) {
+			[blit copyFromTexture:(__bridge id<MTLTexture>)copy.src sourceSlice:copy.srcSlice + slice sourceLevel:copy.srcLevel sourceOrigin:copy.srcOrigin sourceSize:copy.size
+				toTexture:(__bridge id<MTLTexture>)copy.dst destinationSlice:copy.dstSlice + slice destinationLevel:copy.dstLevel destinationOrigin:copy.dstOrigin];
+		}
 		break;
 	case MetalCopyType::TEXTURE_TO_BUFFER:
 	{
@@ -1334,7 +1353,7 @@ void MetalRenderManager::ReplayCopy(const MetalCommandChunk &chunk, const MetalR
 		if (!src) {
 			break;
 		}
-		[blit copyFromTexture:src sourceSlice:0 sourceLevel:copy.srcLevel sourceOrigin:copy.srcOrigin sourceSize:copy.size
+		[blit copyFromTexture:src sourceSlice:copy.srcSlice sourceLevel:copy.srcLevel sourceOrigin:copy.srcOrigin sourceSize:copy.size
 			toBuffer:(__bridge id<MTLBuffer>)copy.dst destinationOffset:copy.dstOffset destinationBytesPerRow:copy.bytesPerRow destinationBytesPerImage:copy.bytesPerImage options:copy.options];
 		break;
 	}
@@ -1357,8 +1376,30 @@ id<MTLTexture> MetalRenderManager::ArrayView(id<MTLTexture> texture) {
 	id<MTLTexture> view = objc_getAssociatedObject(texture, &g_arrayViewKey);
 	if (!view) {
 		const MTLTextureType type = texture.textureType == MTLTextureType2DMultisample ? MTLTextureType2DMultisampleArray : MTLTextureType2DArray;
-		view = [texture newTextureViewWithPixelFormat:texture.pixelFormat textureType:type levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+		// A slice view (see SliceView) gets its array view from the array, as views of views aren't allowed.
+		id<MTLTexture> parent = texture.parentTexture;
+		if (parent && parent.textureType == type) {
+			view = [parent newTextureViewWithPixelFormat:texture.pixelFormat textureType:type levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(texture.parentRelativeSlice, 1)];
+		} else {
+			view = [texture newTextureViewWithPixelFormat:texture.pixelFormat textureType:type levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+		}
 		objc_setAssociatedObject(texture, &g_arrayViewKey, view, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	}
+	return view;
+}
+
+static char g_sliceViewKeys[2];
+
+id<MTLTexture> MetalRenderManager::SliceView(id<MTLTexture> texture, int slice) {
+	_dbg_assert_(slice >= 0 && slice < (int)ARRAY_SIZE(g_sliceViewKeys));
+	if (!texture || texture.arrayLength <= 1) {
+		return texture;
+	}
+	id<MTLTexture> view = objc_getAssociatedObject(texture, &g_sliceViewKeys[slice]);
+	if (!view) {
+		const MTLTextureType type = texture.textureType == MTLTextureType2DMultisampleArray ? MTLTextureType2DMultisample : MTLTextureType2D;
+		view = [texture newTextureViewWithPixelFormat:texture.pixelFormat textureType:type levels:NSMakeRange(0, texture.mipmapLevelCount) slices:NSMakeRange(slice, 1)];
+		objc_setAssociatedObject(texture, &g_sliceViewKeys[slice], view, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 	}
 	return view;
 }

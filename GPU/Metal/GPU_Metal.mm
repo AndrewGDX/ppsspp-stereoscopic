@@ -75,7 +75,7 @@ namespace {
 
 // Increase when the stored keys change meaning (MetalPipelineKey, the shader IDs, the formats).
 constexpr uint32_t METAL_CACHE_MAGIC = 0x4C54534D;  // "MSTL"
-constexpr uint32_t METAL_CACHE_VERSION = 2;
+constexpr uint32_t METAL_CACHE_VERSION = 3;
 
 struct MetalCacheHeader {
 	uint32_t magic;

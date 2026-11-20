@@ -224,11 +224,35 @@ public:
 	MetalShaderModule(ShaderStage stage, std::string_view tag) : stage_(stage), tag_(tag) {}
 	ShaderStage GetStage() const override { return stage_; }
 
+	// For a layered (stereo) target, a vertex shader is translated again to pick the layer. Compiled when first needed.
+	id<MTLFunction> MultiviewFunction(id<MTLDevice> device);
+
 	id<MTLFunction> function;
 	MetalTranslatedShader info;
 	ShaderStage stage_;
 	std::string tag_;
+	std::string source;  // Vertex shaders only, for the multiview function.
+
+private:
+	id<MTLFunction> multiviewFunction_;
+	bool multiviewFailed_ = false;
 };
+
+id<MTLFunction> MetalShaderModule::MultiviewFunction(id<MTLDevice> device) {
+	if (multiviewFunction_ || multiviewFailed_ || stage_ != ShaderStage::Vertex) {
+		return multiviewFunction_;
+	}
+	MetalTranslatedShader multiview;
+	std::string errorMessage;
+	if (TranslateVulkanGLSLToMSL(stage_, source.c_str(), &multiview, &errorMessage, true)) {
+		multiviewFunction_ = CreateMetalFunction(device, multiview, (tag_ + "_multiview").c_str(), &errorMessage);
+	}
+	if (!multiviewFunction_) {
+		ERROR_LOG(Log::G3D, "Failed to create the multiview version of %s: %s", tag_.c_str(), errorMessage.c_str());
+		multiviewFailed_ = true;
+	}
+	return multiviewFunction_;
+}
 
 class MetalPipeline : public Pipeline {
 public:
@@ -271,6 +295,20 @@ MetalPipelineState *MetalPipeline::GetPSO(id<MTLDevice> device, const MetalRende
 	MTLRenderPipelineDescriptor *desc = [MTLRenderPipelineDescriptor new];
 	desc.label = [NSString stringWithUTF8String:tag.c_str()];
 	desc.vertexFunction = vs->function;
+	if (format.layers > 1) {
+		desc.vertexFunction = vs->MultiviewFunction(device);
+		if (!desc.vertexFunction) {
+			psos[key] = nil;
+			return nil;
+		}
+		// Required when the vertex shader picks the layer.
+		switch (prim) {
+		case MTLPrimitiveTypePoint: desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassPoint; break;
+		case MTLPrimitiveTypeLine:
+		case MTLPrimitiveTypeLineStrip: desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassLine; break;
+		default: desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle; break;
+		}
+	}
 	desc.fragmentFunction = fs ? fs->function : nil;
 	if (input) {
 		desc.vertexDescriptor = input->descriptor;
@@ -365,7 +403,7 @@ public:
 	MetalFramebuffer(MetalRenderManager *rm, const FramebufferDesc &desc) : rm_(rm), tag_(desc.tag ? desc.tag : "") {
 		width_ = desc.width;
 		height_ = desc.height;
-		layers_ = 1;
+		layers_ = desc.numLayers;
 		multiSampleLevel_ = desc.multiSampleLevel;
 		hasDepthStencil_ = desc.z_stencil;
 	}
@@ -637,7 +675,13 @@ MetalDrawContext::MetalDrawContext(MetalRenderManager *renderManager) : rm_(rend
 	caps_.fragmentShaderStencilWriteSupported = true;
 	caps_.textureDepthSupported = true;
 	caps_.blendMinMaxSupported = true;
-	caps_.multiViewSupported = false;
+	// Stereo: layered rendering, with the layer picked in the vertex shader (each view an instance). Every Mac GPU
+	// can, and iOS ones from Apple7, which can also do it multisampled.
+#if PPSSPP_PLATFORM(MAC)
+	caps_.multiViewSupported = true;
+#else
+	caps_.multiViewSupported = [device_ supportsFamily:MTLGPUFamilyApple7];
+#endif
 	caps_.isTilingGPU = rm_->IsAppleGPU();
 	caps_.sampleRateShadingSupported = false;
 	caps_.setMaxFrameLatencySupported = true;
@@ -842,6 +886,9 @@ ShaderModule *MetalDrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 		module->Release();
 		return nullptr;
 	}
+	if (stage == ShaderStage::Vertex) {
+		module->source = std::move(source);
+	}
 	return module;
 }
 
@@ -1012,11 +1059,17 @@ void MetalDrawContext::UpdateTextureRegions(Texture *texture, int level, const T
 }
 
 Framebuffer *MetalDrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
-	_dbg_assert_(desc.numLayers == 1);
+	_dbg_assert_(desc.numLayers == 1 || (desc.numLayers == 2 && caps_.multiViewSupported));
+	// Stereo framebuffers are arrays, a slice per eye.
+	const bool layered = desc.numLayers > 1;
 	MetalFramebuffer *fb = new MetalFramebuffer(rm_, desc);
 	MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.width height:desc.height mipmapped:NO];
 	td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
 	td.storageMode = MTLStorageModePrivate;
+	if (layered) {
+		td.textureType = MTLTextureType2DArray;
+		td.arrayLength = desc.numLayers;
+	}
 	fb->color = [device_ newTextureWithDescriptor:td];
 	if (!fb->color) {
 		fb->Release();
@@ -1026,6 +1079,10 @@ Framebuffer *MetalDrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 		MTLTextureDescriptor *dd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8 width:desc.width height:desc.height mipmapped:NO];
 		dd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
 		dd.storageMode = MTLStorageModePrivate;
+		if (layered) {
+			dd.textureType = MTLTextureType2DArray;
+			dd.arrayLength = desc.numLayers;
+		}
 		fb->depth = [device_ newTextureWithDescriptor:dd];
 		if (!fb->depth) {
 			fb->Release();
@@ -1034,7 +1091,7 @@ Framebuffer *MetalDrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	}
 	if (desc.multiSampleLevel > 0) {
 		// Read by the shared code's sample copies (BindFramebufferSamplesAsTexture), so not memoryless.
-		td.textureType = MTLTextureType2DMultisample;
+		td.textureType = layered ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
 		td.sampleCount = 1 << desc.multiSampleLevel;
 		fb->msaaColor = [device_ newTextureWithDescriptor:td];
 		if (!fb->msaaColor) {
@@ -1043,7 +1100,8 @@ Framebuffer *MetalDrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 		}
 		if (desc.z_stencil) {
 			MTLTextureDescriptor *dd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8 width:desc.width height:desc.height mipmapped:NO];
-			dd.textureType = MTLTextureType2DMultisample;
+			dd.textureType = layered ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
+			dd.arrayLength = desc.numLayers;
 			dd.sampleCount = td.sampleCount;
 			dd.usage = MTLTextureUsageRenderTarget;
 			dd.storageMode = MTLStorageModePrivate;
@@ -1118,9 +1176,11 @@ void MetalDrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x
 			const bool depth = copyDepth;
 			const MTLBlitOption option = depth ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionStencilFromDepthStencil;
 			const int bytesPerRow = width * (depth ? 4 : 1);
-			MetalPushAlloc alloc = rm_->Push().Allocate(bytesPerRow * height, 16);
-			rm_->CopyTextureToBuffer(src->depth, level, srcOrigin, size, alloc.buffer, alloc.offset, bytesPerRow, bytesPerRow * height, option);
-			rm_->CopyBufferToTexture(alloc.buffer, alloc.offset, bytesPerRow, bytesPerRow * height, size, dst->depth, 0, dstLevel, dstOrigin, option, false);
+			for (int layer = 0; layer < std::min(src->Layers(), dst->Layers()); layer++) {
+				MetalPushAlloc alloc = rm_->Push().Allocate(bytesPerRow * height, 16);
+				rm_->CopyTextureToBuffer(src->depth, level, srcOrigin, size, alloc.buffer, alloc.offset, bytesPerRow, bytesPerRow * height, option, nullptr, layer);
+				rm_->CopyBufferToTexture(alloc.buffer, alloc.offset, bytesPerRow, bytesPerRow * height, size, dst->depth, layer, dstLevel, dstOrigin, option, false);
+			}
 		}
 	}
 }
@@ -1239,6 +1299,7 @@ void MetalDrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 		desc.clearColor = ClearColorFromRGBA(rp.clearColor);
 		desc.clearDepth = rp.clearDepth;
 		desc.clearStencil = rp.clearStencil;
+		desc.layers = fb->Layers();
 		desc.tag = tag;
 		rm_->BindRenderPass(desc);
 	}
@@ -1259,6 +1320,10 @@ void MetalDrawContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, A
 	case Aspect::STENCIL_BIT: tex = fb->StencilView(); break;
 	default: break;
 	}
+	// A stereo framebuffer binds as an array, or as one of its eyes.
+	if (layer != ALL_LAYERS) {
+		tex = rm_->SliceView(tex, layer);
+	}
 	boundTextures_[binding] = tex ? tex : nullTexture_;
 	boundThin3DTextures_[binding] = nullptr;
 }
@@ -1267,7 +1332,11 @@ void MetalDrawContext::BindFramebufferSamplesAsTexture(Framebuffer *fbo, int bin
 	_dbg_assert_(binding < (int)MAX_TEXTURE_SLOTS);
 	_dbg_assert_(fbo && !fbo->IsSwapchain());
 	MetalFramebuffer *fb = (MetalFramebuffer *)fbo;
-	boundTextures_[binding] = fb->msaaColor ? fb->msaaColor : fb->color;
+	id<MTLTexture> tex = fb->msaaColor ? fb->msaaColor : fb->color;
+	if (layer != ALL_LAYERS) {
+		tex = rm_->SliceView(tex, layer);
+	}
+	boundTextures_[binding] = tex;
 	boundThin3DTextures_[binding] = nullptr;
 }
 

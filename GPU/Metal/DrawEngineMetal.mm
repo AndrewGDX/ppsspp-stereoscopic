@@ -309,6 +309,10 @@ DrawEngineMetal::Pipeline *DrawEngineMetal::GetOrCreatePipeline(const MetalPipel
 	MTLRenderPipelineDescriptor *desc = [MTLRenderPipelineDescriptor new];
 	desc.vertexDescriptor = vd;
 	desc.rasterSampleCount = format.sampleCount;
+	if (format.layers > 1) {
+		// Stereo: the vertex shader picks the layer, which needs the topology up front. We only draw triangles.
+		desc.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+	}
 	desc.depthAttachmentPixelFormat = format.depth;
 	desc.stencilAttachmentPixelFormat = format.stencil;
 	if (format.color != MTLPixelFormatInvalid) {
@@ -361,6 +365,7 @@ struct StoredMetalPipeline {
 	uint32_t depth;
 	uint32_t stencil;
 	uint32_t sampleCount;
+	uint32_t layers;
 };
 
 uint32_t DrawEngineMetal::PipelineRecordSize() {
@@ -376,6 +381,7 @@ bool DrawEngineMetal::SavePipelines(FILE *f) {
 		stored.depth = (uint32_t)pipeline->format.depth;
 		stored.stencil = (uint32_t)pipeline->format.stencil;
 		stored.sampleCount = (uint32_t)pipeline->format.sampleCount;
+		stored.layers = (uint32_t)pipeline->format.layers;
 		ok = ok && fwrite(&stored, sizeof(stored), 1, f) == 1;
 	});
 	return ok;
@@ -395,6 +401,7 @@ bool DrawEngineMetal::LoadPipelines(FILE *f, int count, bool waitForCompiles) {
 		format.depth = (MTLPixelFormat)stored.depth;
 		format.stencil = (MTLPixelFormat)stored.stencil;
 		format.sampleCount = (int)stored.sampleCount;
+		format.layers = (int)stored.layers;
 		DecVtxFormat decFmt;
 		const bool useHWTransform = stored.key.vtxFmtId != SOFTWARE_TRANSFORM_VTXFMT;
 		if (useHWTransform) {

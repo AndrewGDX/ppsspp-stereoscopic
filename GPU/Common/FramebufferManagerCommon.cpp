@@ -3211,6 +3211,14 @@ void FramebufferManagerCommon::NotifyConfigChanged() {
 	updatePostShaders_ = true;
 }
 
+void FramebufferManagerCommon::NotifyLayersChanged() {
+	// Their contents are lost, but the game redraws them.
+	DestroyAllFBOs();
+	ReleasePipelines();
+	draw2D_.DeviceLost();
+	draw2D_.DeviceRestore(draw_);
+}
+
 void FramebufferManagerCommon::DestroyAllFBOs() {
 	DiscardFramebufferCopy();
 	currentRenderVfb_ = nullptr;

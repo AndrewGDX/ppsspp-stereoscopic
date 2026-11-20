@@ -13,7 +13,7 @@ enum : uint64_t {
 	DIRTY_WORLDMATRIX | DIRTY_FRAMEBUFFER_DIM | DIRTY_VIEWMATRIX | DIRTY_TEXMATRIX | DIRTY_ALPHACOLORREF |
 	DIRTY_PROJMATRIX | DIRTY_FOGCOLOR | DIRTY_FOGCOEF | DIRTY_TEXENV | DIRTY_TEX_ALPHA_MUL | DIRTY_STENCILREPLACEVALUE |
 	DIRTY_ALPHACOLORMASK | DIRTY_SHADERBLEND | DIRTY_COLORWRITEMASK | DIRTY_UVSCALEOFFSET | DIRTY_TEXCLAMP | DIRTY_MATAMBIENTALPHA |
-	DIRTY_DEPAL | DIRTY_VIEWPORT_UNIFORMS | DIRTY_RASTER_OFFSET | DIRTY_MIPBIAS,
+	DIRTY_DEPAL | DIRTY_VIEWPORT_UNIFORMS | DIRTY_RASTER_OFFSET | DIRTY_MIPBIAS | DIRTY_STEREO,
 	DIRTY_LIGHT_UNIFORMS =
 	DIRTY_LIGHT_CONTROL | DIRTY_LIGHT0 | DIRTY_LIGHT1 | DIRTY_LIGHT2 | DIRTY_LIGHT3 |
 	DIRTY_MATDIFFUSE | DIRTY_MATSPECULAR | DIRTY_MATEMISSIVE | DIRTY_AMBIENT,
@@ -42,10 +42,12 @@ struct alignas(16) UB_VS_FS_Base {
 	float texClamp[4];
 	float blendFixA[3]; float stencilReplaceValue;
 	float blendFixB[3]; float rotation;
-	// VR stuff is to go here, later. For normal drawing, we can then get away
-	// with just uploading the first X bytes of the struct (up to and including fogCoef).
+	// Stereoscopy (GPU_USE_STEREOSCOPY). Each eye's clip x moves by its scale times (w - convergence), or
+	// times uiDepth * w for UI, which the whole draw is (forceUI) or the vertices nearer than thresholdW.
+	float stereoEyeScale[2]; float stereoConvergence; float stereoForceUI;
+	float stereoUIDepth; float stereoUIThresholdW; float padding5[2];
 };
-static_assert(sizeof(UB_VS_FS_Base) <= 432, "UB_VS_FS_Base should be 432 bytes");
+static_assert(sizeof(UB_VS_FS_Base) <= 464, "UB_VS_FS_Base should be 464 bytes");
 
 static const char * const ub_baseStr =
 R"(  mat4 u_proj;
@@ -69,6 +71,8 @@ R"(  mat4 u_proj;
   vec4 u_texclamp;
   vec3 u_blendFixA; float u_stencilReplaceValue;
   vec3 u_blendFixB; float u_rotation;
+  vec4 u_stereo;
+  vec4 u_stereoUI;
 )";
 
 // 512 bytes. Would like to shrink more. Some colors only have 8-bit precision and we expand
@@ -132,6 +136,8 @@ uint32_t PackLightControlBits();
 uint32_t PackDepalBits(bool pixelMapped);
 // Call before reading the dirty uniforms: the depal uniform depends on pixelMapped, which changes per draw.
 void DirtyDepalForDraw(bool pixelMapped);
+// Update the stereo uniforms for the draw about to be made.
+void UpdateStereoDrawClass();
 
 void UpdateFogCoef(const GEState &state, float fogCoef[2]);
 

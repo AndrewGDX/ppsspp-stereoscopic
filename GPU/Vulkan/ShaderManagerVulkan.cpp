@@ -222,6 +222,7 @@ void ShaderManagerVulkan::ClearShaders() {
 
 uint64_t ShaderManagerVulkan::UpdateUniforms(bool useBufferedRendering, bool pixelMapped) {
 	DirtyDepalForDraw(pixelMapped);
+	UpdateStereoDrawClass();
 	uint64_t dirty = gstate_c.GetDirtyUniforms();
 	if (dirty != 0) {
 		if (dirty & DIRTY_BASE_UNIFORMS)

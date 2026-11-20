@@ -67,7 +67,7 @@ enum : uint64_t {
 	DIRTY_SHADERBLEND = 1ULL << 17,  // Used only for in-shader blending.
 
 	DIRTY_UVSCALEOFFSET = 1ULL << 18,
-	// Free uniform bit 19!
+	DIRTY_STEREO = 1ULL << 19,
 
 	DIRTY_VIEWPORT_UNIFORMS = 1ULL << 20,
 	// Free uniform bit 20!

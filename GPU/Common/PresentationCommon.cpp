@@ -322,22 +322,7 @@ static std::string ReadShaderSrc(const Path &filename) {
 }
 
 // Note: called on resize and settings changes.
-// Also takes care of making sure the appropriate stereo shader is compiled.
 bool PresentationCommon::UpdatePostShader(const DisplayLayoutConfig &config) {
-	DestroyStereoShader();
-
-	if (gstate_c.Use(GPU_USE_SIMPLE_STEREO_PERSPECTIVE)) {
-		const ShaderInfo *stereoShaderInfo = GetPostShaderInfo(g_Config.sStereoToMonoShader);
-		if (stereoShaderInfo) {
-			bool result = CompilePostShader(stereoShaderInfo, &stereoPipeline_);
-			if (result) {
-				stereoShaderInfo_ = new ShaderInfo(*stereoShaderInfo);
-			}
-		} else {
-			WARN_LOG(Log::G3D, "Failed to get info about stereo shader '%s'", g_Config.sStereoToMonoShader.c_str());
-		}
-	}
-
 	std::vector<const ShaderInfo *> shaderInfo;
 	if (!g_Config.vPostShaderNames.empty()) {
 		ReloadAllPostShaderInfo(draw_);
@@ -664,7 +649,6 @@ void PresentationCommon::DestroyDeviceObjects() {
 
 	restorePostShader_ = usePostShader_;
 	DestroyPostShader();
-	DestroyStereoShader();
 }
 
 void PresentationCommon::DestroyPostShader() {
@@ -677,12 +661,6 @@ void PresentationCommon::DestroyPostShader() {
 	postShaderFBOUsage_.clear();
 }
 
-void PresentationCommon::DestroyStereoShader() {
-	DoRelease(stereoPipeline_);
-	delete stereoShaderInfo_;
-	stereoShaderInfo_ = nullptr;
-}
-
 Draw::ShaderModule *PresentationCommon::CompileShaderModule(ShaderStage stage, ShaderLanguage lang, const std::string &src, std::string *errorString) const {
 	std::string translated = src;
 	if (lang != lang_) {
@@ -693,6 +671,14 @@ Draw::ShaderModule *PresentationCommon::CompileShaderModule(ShaderStage stage, S
 		}
 	}
 	return draw_->CreateShaderModule(stage, lang_, (const uint8_t *)translated.c_str(), translated.size(), "postshader");
+}
+
+bool StereoscopySupported(Draw::DrawContext *draw) {
+	return draw && draw->GetDeviceCaps().multiViewSupported && !g_Config.bSoftwareRendering && !IsVREnabled() && !g_Config.bForceVR;
+}
+
+bool StereoscopyEnabled(Draw::DrawContext *draw) {
+	return g_Config.iStereoscopyMode != (int)StereoscopyMode::OFF && !g_Config.bSkipBufferEffects && StereoscopySupported(draw);
 }
 
 void PresentationCommon::SourceBlank() {
@@ -765,6 +751,34 @@ void PresentationCommon::UpdateUniforms(bool hasVideo) {
 	hasVideo_ = hasVideo;
 }
 
+// Where each eye goes in the frame. Each eye is laid out in eyeFrame (at the origin) like a mono image is in the
+// whole frame, then drawn with the eye's viewport. The half modes squeeze each eye into half the frame, the full
+// ones keep its aspect ratio, so the two together are twice as wide (or tall) as the frame and get letterboxed.
+static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect *eyeFrame, FRect viewports[2]) {
+	const float halfW = frame.w * 0.5f;
+	const float halfH = frame.h * 0.5f;
+	const bool full = mode == StereoscopyMode::FULL_SBS || mode == StereoscopyMode::FULL_TAB;
+	*eyeFrame = { 0.0f, 0.0f, full ? halfW : frame.w, full ? halfH : frame.h };
+	for (int eye = 0; eye < 2; eye++) {
+		FRect &vp = viewports[eye];
+		switch (mode) {
+		case StereoscopyMode::FULL_SBS:
+			vp = { frame.x + eye * halfW, frame.y + halfH * 0.5f, halfW, halfH };
+			break;
+		case StereoscopyMode::HALF_TAB:
+			vp = { frame.x, frame.y + eye * halfH, frame.w, halfH };
+			break;
+		case StereoscopyMode::FULL_TAB:
+			vp = { frame.x + halfW * 0.5f, frame.y + eye * halfH, halfW, halfH };
+			break;
+		case StereoscopyMode::HALF_SBS:
+		default:
+			vp = { frame.x + eye * halfW, frame.y, halfW, frame.h };
+			break;
+		}
+	}
+}
+
 void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, OutputFlags flags, int uvRotation, float u0, float v0, float u1, float v1) {
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 
@@ -776,11 +790,12 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	// This should auto-disable usePostShader_ and call ShowPostShaderError().
 
 	bool useNearest = flags & OutputFlags::NEAREST;
-	bool useStereo = gstate_c.Use(GPU_USE_SIMPLE_STEREO_PERSPECTIVE) && stereoPipeline_ != nullptr;  // TODO: Also check that the backend has support for it.
 	// Post shaders output one layer, which would show the left eye's view to both.
 	const bool vrStereo = UseVRStereoSource();
+	// A mono source (like a frame from RAM) is shown to both eyes, so the layout doesn't jump.
+	stereoscopyOutput_ = gstate_c.Use(GPU_USE_STEREOSCOPY) && !(flags & OutputFlags::NATIVE_SIZE);
 
-	const bool usePostShader = usePostShader_ && !useStereo && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
+	const bool usePostShader = usePostShader_ && !stereoscopyOutput_ && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
 	const bool isFinalAtOutputResolution = usePostShader && postShaderFramebuffers_.size() < postShaderPipelines_.size();
 	int lastWidth = srcWidth_;
 	int lastHeight = srcHeight_;
@@ -791,9 +806,13 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 
 	// These are the output coordinates.
 	FRect frame = GetScreenFrame(config.bIgnoreScreenInsets, output);
-	// Note: In cardboard mode, we halve the width here to compensate
-	// for splitting the window in half, while still reusing normal centering.
-	if (UseCardboard(config)) {
+	if (stereoscopyOutput_) {
+		GetStereoscopyLayout((StereoscopyMode)g_Config.iStereoscopyMode, frame, &frame, stereoViewports_);
+		pixelWidth = (int)frame.w;
+		pixelHeight = (int)frame.h;
+	} else if (UseCardboard(config)) {
+		// Note: In cardboard mode, we halve the width here to compensate
+		// for splitting the window in half, while still reusing normal centering.
 		frame.w /= 2.0;
 		pixelWidth /= 2;
 	}
@@ -881,7 +900,7 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 		vrUV_[i][1] = verts[i].v;
 	}
 #endif
-	if (isFinalAtOutputResolution || useStereo) {
+	if (isFinalAtOutputResolution) {
 		// In this mode, we ignore the output's rotation matrix. Apply manually.
 		if (output.rotation != DisplayRotation::ROTATE_0) {
 			for (int i = 0; i < 4; i++) {
@@ -1168,10 +1187,9 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	vrPresentationMode_ = -1;
 #endif
 	bool useNearest = outputFlags_ & OutputFlags::NEAREST;
-	bool useStereo = gstate_c.Use(GPU_USE_SIMPLE_STEREO_PERSPECTIVE) && stereoPipeline_ != nullptr;  // TODO: Also check that the backend has support for it.
 	const bool vrStereo = UseVRStereoSource();
 
-	const bool usePostShader = usePostShader_ && !useStereo && !vrStereo && !(outputFlags_ & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
+	const bool usePostShader = usePostShader_ && !stereoscopyOutput_ && !vrStereo && !(outputFlags_ & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
 	const bool isFinalAtOutputResolution = usePostShader && postShaderFramebuffers_.size() < postShaderPipelines_.size();
 	int lastWidth = srcWidth_;
 	int lastHeight = srcHeight_;
@@ -1181,7 +1199,8 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 
 	OverlayLayout overlay;
 	bool drawOverlay = false;
-	if (!(outputFlags_ & OutputFlags::NATIVE_SIZE)) {
+	// An overlay is laid out for the whole frame, not per eye.
+	if (!(outputFlags_ & OutputFlags::NATIVE_SIZE) && !stereoscopyOutput_) {
 		const FRect frame = GetScreenFrame(config.bIgnoreScreenInsets, output);
 		drawOverlay = GetOverlayLayout(config, frame.x, frame.y, frame.w, frame.h, &overlay) && PrepareOverlayTexture(overlay);
 	}
@@ -1202,14 +1221,7 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 
 	Draw::Pipeline *pipeline = (outputFlags_ & OutputFlags::RB_SWIZZLE) ? texColorRBSwizzle_ : texColor_;
 
-	if (useStereo) {
-		draw_->BindPipeline(stereoPipeline_);
-		if (!BindSource(0, true)) {
-			// Fall back
-			draw_->BindPipeline(texColor_);
-			useStereo = false;  // Otherwise we end up uploading the wrong uniforms
-		}
-	} else if (vrStereo) {
+	if (vrStereo) {
 		draw_->BindPipeline(texColorStereo_);
 		BindSource(0, true);
 	} else {
@@ -1231,10 +1243,6 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 		CalculatePostShaderUniforms(lastWidth, lastHeight, (int)rc_.w, (int)rc_.h, &postShaderInfo_.back(), &uniforms);
 		draw_->UpdateDynamicUniformBuffer(&uniforms, sizeof(uniforms));
 		previousUniforms_ = uniforms;
-	} else if (useStereo) {
-		CalculatePostShaderUniforms(lastWidth, lastHeight, (int)rc_.w, (int)rc_.h, stereoShaderInfo_, &uniforms);
-		draw_->UpdateDynamicUniformBuffer(&uniforms, sizeof(uniforms));
-		previousUniforms_ = uniforms;
 	} else {
 		Draw::VsTexColUB ub{};
 		memcpy(ub.WorldViewProj, output.rotMatrix.m, sizeof(float) * 16);
@@ -1254,7 +1262,17 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 
 	CardboardSettings cardboardSettings;
 	GetCardboardSettings(config, output, &cardboardSettings);
-	if (cardboardSettings.enabled) {
+	if (stereoscopyOutput_) {
+		for (int eye = 0; eye < 2; eye++) {
+			const int layer = g_Config.bStereoscopySwapEyes ? 1 - eye : eye;
+			if (srcFramebuffer_) {
+				draw_->BindFramebufferAsTexture(srcFramebuffer_, 0, Draw::Aspect::COLOR_BIT, srcFramebuffer_->Layers() > 1 ? layer : 0);
+			}
+			const FRect &vp = stereoViewports_[eye];
+			setViewport(vp.x, vp.y, vp.w, vp.h);
+			draw_->Draw(4, 0);
+		}
+	} else if (cardboardSettings.enabled) {
 		// TODO: This could actually support stereo now, with an appropriate shader.
 
 		// This is what the left eye sees.

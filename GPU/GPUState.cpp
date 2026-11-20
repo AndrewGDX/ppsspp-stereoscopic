@@ -412,7 +412,7 @@ static constexpr const char * g_gpuUseFlagNames[32] = {
 	"GPU_USE_PRE_ROTATION", // bit 28
 	"GPU_USE_VIRTUAL_REALITY",
 	"GPU_USE_SINGLE_PASS_STEREO",
-	"GPU_USE_SIMPLE_STEREO_PERSPECTIVE",
+	"GPU_USE_STEREOSCOPY",
 };
 
 const char *GpuUseFlagToString(int useFlag) {

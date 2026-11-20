@@ -925,6 +925,9 @@ static constexpr const char *msaaLevelNames[] = { "Off", "2x", "4x", "8x", "16x"
 static constexpr const char *androidHwScaleNames[] = { "Native device resolution", "Same as Rendering resolution", "1x PSP", "2x PSP", "3x PSP", "4x PSP", "5x PSP" };
 static constexpr const char *frameSkipNames[] = { "Off", "1", "2", "3", "4" };
 static constexpr const char *skipGPUReadbackModeNames[] = { "No", "Skip", "Copy to texture" };
+static constexpr const char *stereoscopyModeNames[] = { "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)" };
+static constexpr const char *stereoscopyDominantEyeNames[] = { "None", "Left", "Right" };
+static constexpr const char *stereoscopyUIDetectionNames[] = { "Off", "Unsafe", "Safe", "Advanced" };
 static constexpr const char *depthRasterModeNames[] = { "Auto", "Low", "Off", "Always on" };
 static constexpr const char *frameRateLimit30Names[] = { "Auto", "Always", "Off" };
 static constexpr const char *bloomHackNames[] = { "Off", "Safe", "Balanced", "Aggressive" };
@@ -991,9 +994,24 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Frame Skipping").Choices(frameSkipNames),
 	ConfigSetting("AutoFrameSkip", SETTING(g_Config, bAutoFrameSkip), false, CfgFlag::PER_GAME | CfgFlag::REPORT)
 		.Label(I18NCat::GRAPHICS, "Auto FrameSkip").OnChanged(&OnAutoFrameSkipChanged),
-	ConfigSetting("StereoRendering", SETTING(g_Config, bStereoRendering), false, CfgFlag::PER_GAME)
-		.Label(I18NCat::GRAPHICS, "Stereo rendering"),
-	ConfigSetting("StereoToMonoShader", SETTING(g_Config, sStereoToMonoShader), "RedBlue", CfgFlag::PER_GAME),
+	ConfigSetting("StereoscopyMode", SETTING(g_Config, iStereoscopyMode), (int)StereoscopyMode::OFF, CfgFlag::PER_GAME | CfgFlag::REPORT)
+		.Label(I18NCat::GRAPHICS, "Stereoscopic 3D Mode").Choices(stereoscopyModeNames),
+	ConfigSetting("StereoscopyDominantEye", SETTING(g_Config, iStereoscopyDominantEye), (int)StereoscopyDominantEye::NONE, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Dominant Eye").Choices(stereoscopyDominantEyeNames),
+	ConfigSetting("StereoscopySwapEyes", SETTING(g_Config, bStereoscopySwapEyes), false, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Swap Eyes"),
+	ConfigSetting("StereoscopySeparation", SETTING(g_Config, fStereoscopySeparation), 20.0f, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Separation").Range(0.0f, 100.0f, 0.1f),
+	ConfigSetting("StereoscopyConvergence", SETTING(g_Config, fStereoscopyConvergence), 20.0f, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Convergence").Range(0.0f, 5000.0f, 0.1f),
+	ConfigSetting("StereoscopyUIDetectionMode", SETTING(g_Config, iStereoscopyUIDetectionMode), (int)StereoscopyUIDetection::SAFE, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "UI Detection Mode").Choices(stereoscopyUIDetectionNames),
+	ConfigSetting("StereoscopyUIDepth", SETTING(g_Config, iStereoscopyUIDepth), 0, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "UI Depth").Range(-100, 100),
+	ConfigSetting("StereoscopySecondLayerParallax", SETTING(g_Config, iStereoscopySecondLayerParallax), 0, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Second Layer Parallax").Range(-100, 100),
+	ConfigSetting("StereoscopyUIDetectionThreshold", SETTING(g_Config, iStereoscopyUIDetectionThreshold), 0, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "UI Detection Threshold").Range(0, 1000),
 	// Read before the new settings, which use them as defaults.
 	ConfigSetting("FrameRate", SETTING(g_Config, iLegacyFpsLimit1), 0, CfgFlag::PER_GAME | CfgFlag::DONT_SAVE),
 	ConfigSetting("FrameRate2", SETTING(g_Config, iLegacyFpsLimit2), -1, CfgFlag::PER_GAME | CfgFlag::DONT_SAVE),

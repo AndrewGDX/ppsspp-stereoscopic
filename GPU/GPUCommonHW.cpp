@@ -14,6 +14,7 @@
 #include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/Common/TextureCacheCommon.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
+#include "GPU/Common/PresentationCommon.h"
 
 struct CommonCommandTableEntry {
 	uint8_t cmd;
@@ -409,10 +410,15 @@ GPUCommonHW::~GPUCommonHW() {
 void GPUCommonHW::CheckConfigChanged(const DisplayLayoutConfig &config) {
 	if (configChanged_) {
 		ClearCacheNextFrame();
+		const int layers = framebufferManager_->GetFramebufferLayers();
 		gstate_c.SetUseFlags(CheckGPUFeatures());
 		drawEngineCommon_->NotifyConfigChanged();
 		textureCache_->NotifyConfigChanged();
 		framebufferManager_->NotifyConfigChanged();
+		if (framebufferManager_->GetFramebufferLayers() != layers) {
+			// Stereoscopy was turned on or off.
+			framebufferManager_->NotifyLayersChanged();
+		}
 		BuildReportingInfo();
 		configChanged_ = false;
 	}
@@ -623,6 +629,11 @@ u32 GPUCommonHW::CheckGPUFeatures() const {
 
 	if (!PSP_CoreParameter().compat.flags().DisableRangeCulling && !draw_->GetBugs().Has(Draw::Bugs::BROKEN_NAN_IN_CONDITIONAL)) {
 		features |= GPU_USE_VS_RANGE_CULLING;
+	}
+
+	if (StereoscopyEnabled(draw_)) {
+		// Framebuffers get a layer per eye, and are sampled as arrays.
+		features |= GPU_USE_STEREOSCOPY | GPU_USE_SINGLE_PASS_STEREO | GPU_USE_FRAMEBUFFER_ARRAYS;
 	}
 
 	// Headless --disable-gpu-features, to test the fallbacks for GPUs without them (old Mali has none of

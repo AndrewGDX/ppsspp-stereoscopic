@@ -499,7 +499,14 @@ enum : u32 {
 	// VR flags (reserved or in-use)
 	GPU_USE_VIRTUAL_REALITY = FLAG_BIT(29),
 	GPU_USE_SINGLE_PASS_STEREO = FLAG_BIT(30),
-	GPU_USE_SIMPLE_STEREO_PERSPECTIVE = FLAG_BIT(31),
+	GPU_USE_STEREOSCOPY = FLAG_BIT(31),  // Stereoscopic 3D on a normal display, see StereoscopyEnabled(). Implies GPU_USE_SINGLE_PASS_STEREO.
+};
+
+enum class StereoDrawClass : uint8_t {
+	WORLD,  // Shifted by depth.
+	UI,  // At the UI depth.
+	SECOND_LAYER,  // A full screen 2D image (like a menu background), at the second layer parallax.
+	FLAT,  // Not shifted: 2D draws without UI detection, copies of what's already stereo, clears.
 };
 
 // Note that this take a flag index, not the bit value.
@@ -665,6 +672,11 @@ public:
 	// TolerantDepthEqual: the current draw's EQUAL depth test is done as GEQUAL, with its Z raised by
 	// tolerantDepthEqualOffset (in the viewport Z offset uniform). See DepthTestFunctionForDraw.
 	bool tolerantDepthEqual;
+
+	// GPU_USE_STEREOSCOPY: how the current draw is shifted between the eyes. See UpdateStereoDrawClass.
+	StereoDrawClass stereoDrawClass;
+	// The software transform of a through mode draw found it covering the render target.
+	bool stereoFullscreen2D;
 
 	GEBufferFormat framebufFormat;
 	// Some games use a very specific masking setup to draw into the alpha channel of a 4444 target using the blue channel of a 565 target.

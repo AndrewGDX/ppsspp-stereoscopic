@@ -427,10 +427,16 @@ public:
 	std::vector<std::string> vPostShaderNames; // Off for chain end (only Off for no shader)
 	std::map<std::string, float> mPostShaderSetting;
 
-	// Note that this is separate from VR stereo, though it'll share some code paths.
-	bool bStereoRendering;
-	// There can only be one, unlike regular post shaders.
-	std::string sStereoToMonoShader;
+	// Stereoscopic 3D (StereoscopyMode). Separate from VR stereo, though it shares the single-pass stereo rendering.
+	int iStereoscopyMode;
+	int iStereoscopyDominantEye;  // StereoscopyDominantEye
+	bool bStereoscopySwapEyes;
+	float fStereoscopySeparation;
+	float fStereoscopyConvergence;
+	int iStereoscopyUIDetectionMode;  // StereoscopyUIDetection
+	int iStereoscopyUIDepth;
+	int iStereoscopySecondLayerParallax;
+	int iStereoscopyUIDetectionThreshold;
 
 	bool bShaderChainRequires60FPS;
 	std::string sTextureShaderName;

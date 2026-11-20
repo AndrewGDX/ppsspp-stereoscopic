@@ -335,6 +335,27 @@ enum class SkipGPUReadbackMode : int {
 	COPY_TO_TEXTURE,
 };
 
+enum class StereoscopyMode : int {
+	OFF,
+	HALF_SBS,
+	FULL_SBS,
+	HALF_TAB,
+	FULL_TAB,
+};
+
+enum class StereoscopyDominantEye : int {
+	NONE,
+	LEFT,
+	RIGHT,
+};
+
+enum class StereoscopyUIDetection : int {
+	OFF,
+	UNSAFE,
+	SAFE,
+	ADVANCED,
+};
+
 enum class RemoteISOShareType : int {
 	RECENT,
 	LOCAL_FOLDER,

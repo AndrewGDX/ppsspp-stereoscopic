@@ -99,13 +99,18 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 	}
 
 	bool useSimpleStereo = id.Bit(VS_BIT_SIMPLE_STEREO);
+	// Stereoscopic 3D on a normal display, as opposed to VR's per-eye views.
+	const bool useStereoscopy = useSimpleStereo && gstate_c.Use(GPU_USE_STEREOSCOPY);
+	// The view (eye) index. With D3D11, each eye is an instance, and the shader picks its layer.
+	const char *stereoEye = compat.shaderLanguage == HLSL_D3D11 ? "In.instanceId" : "gl_ViewIndex";
 
 	if (useSimpleStereo) {
-		if (compat.shaderLanguage != ShaderLanguage::GLSL_VULKAN) {
-			*errorString = "Multiview only supported with Vulkan for now";
+		if (compat.shaderLanguage == ShaderLanguage::GLSL_VULKAN) {
+			extensions.push_back("#extension GL_EXT_multiview : enable");
+		} else if (compat.shaderLanguage != HLSL_D3D11 || !useStereoscopy) {
+			*errorString = "Single pass stereo is only supported with Vulkan and D3D11";
 			return false;
 		}
-		extensions.push_back("#extension GL_EXT_multiview : enable");
 	}
 
 	ShaderWriter p(buffer, compat, ShaderStage::Vertex, extensions);
@@ -264,6 +269,9 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 				WRITE(p, "  vec3 normal : NORMAL;\n");
 			}
 			WRITE(p, "  vec3 position : POSITION;\n");
+			if (useSimpleStereo) {
+				WRITE(p, "  uint instanceId : SV_InstanceID;\n");
+			}
 			WRITE(p, "};\n");
 		} else {
 			WRITE(p, "struct VS_IN {\n");
@@ -284,6 +292,9 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 				WRITE(p, "  vec3 color1 : COLOR1;\n");
 			}
 			WRITE(p, "  float fog : NORMAL;\n");
+			if (useSimpleStereo) {
+				WRITE(p, "  uint instanceId : SV_InstanceID;\n");
+			}
 			WRITE(p, "};\n");
 		}
 
@@ -310,6 +321,9 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		}
 		if (depthCullEnable) {
 			WRITE(p, "  float2 gl_CullDistance : SV_CullDistance0;\n");
+		}
+		if (useSimpleStereo) {
+			WRITE(p, "  uint layer : SV_RenderTargetArrayIndex;\n");
 		}
 		WRITE(p, "};\n");
 	} else {
@@ -554,14 +568,6 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 			WRITE(p, "  vec4 viewPos = vec4(mul(vec4(worldpos, 1.0), gl_ViewIndex == 0 ? u_view : u_viewR).xyz, 1.0);\n");
 		} else {
 			WRITE(p, "  vec4 viewPos = vec4(mul(vec4(worldpos, 1.0), u_view).xyz, 1.0);\n");
-		}
-		if (useSimpleStereo && !gstate_c.Use(GPU_USE_VIRTUAL_REALITY)) {
-			float ipd = 0.065f;
-			float scale = 1.0f;
-			if (PSP_CoreParameter().compat.vrCompat().UnitsPerMeter > 0) {
-				scale = PSP_CoreParameter().compat.vrCompat().UnitsPerMeter;
-			}
-			WRITE(p, "  viewPos.x += %f * float(gl_ViewIndex * 2 - 1);\n", scale * ipd * 0.5);
 		}
 
 		// Final view and projection transforms.
@@ -1013,6 +1019,14 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 	// Convert to NDC space, using the framebuffer offset and (inverse size * 2) stored in u_xywh.
 	WRITE(p, "  outPos.xy = (((outPos.xy + u_xywh.xy) * u_xywh.zw) - vec2(1.0, 1.0)) * outPos.w;\n");
 
+	if (useStereoscopy) {
+		// Each eye moves by its scale times (w - convergence), so at the convergence distance the eyes agree.
+		// UI goes at a fixed depth instead (in clip space, so times w).
+		WRITE(p, "  float stereoDepth = outPos.w - u_stereo.z;\n");
+		WRITE(p, "  if (u_stereo.w > 0.5 || outPos.w < u_stereoUI.y) stereoDepth = u_stereoUI.x * outPos.w;\n");
+		WRITE(p, "  outPos.x += (%s == 0 ? u_stereo.x : u_stereo.y) * stereoDepth;\n", stereoEye);
+	}
+
 	if (gstate_c.Use(GPU_ROUND_DEPTH_TO_16BIT)) {
 		// Actually 15-bit. Truncate here fixes Afterburner (similarly to the min/max clipping above).
 		// Possibly this should only be 15-bit in transformed mode? Full 16 in through? needs hardware testing.
@@ -1092,6 +1106,9 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 	}
 
 	if (compat.shaderLanguage == HLSL_D3D11) {
+		if (useSimpleStereo) {
+			WRITE(p, "  Out.layer = In.instanceId;\n");
+		}
 		WRITE(p, "  return Out;\n");
 	}
 	WRITE(p, "}\n");

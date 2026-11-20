@@ -540,55 +540,6 @@ static void BuildGraphicsPage(SettingsPage *page) {
 		page->Header({ I18NCat::VR, "Virtual reality" });
 		page->Setting(&g_Config.bForceVR);
 	}
-
-	// Experimental, will move to main graphics settings later.
-	bool multiViewSupported = draw->GetDeviceCaps().multiViewSupported;
-
-	auto enableStereo = [=]() -> bool {
-		return g_Config.bStereoRendering && multiViewSupported;
-	};
-
-	if (multiViewSupported) {
-		page->Header({ I18NCat::GRAPHICS, "Stereo rendering" });
-		page->Setting(&g_Config.bStereoRendering);
-
-		page->Custom({ I18NCat::GRAPHICS, "Stereo display shader" }, [host](UI::ViewGroup *parent) -> UI::View * {
-			ChoiceWithValueDisplay *stereoShaderChoice = parent->Add(new ChoiceWithValueDisplay(&g_Config.sStereoToMonoShader, T(I18NCat::GRAPHICS, "Stereo display shader"), &PostShaderTranslateName));
-			stereoShaderChoice->OnClick.Add([host](EventParams &e) {
-				auto gr = GetI18NCategory(I18NCat::GRAPHICS);
-				auto procScreen = new PostProcScreen(gr->T("Stereo display shader"), 0, true);
-				procScreen->OnChoice.Add([host](EventParams &) {
-					host->RecreatePageViews();
-				});
-				if (e.v)
-					procScreen->SetPopupOrigin(e.v);
-				host->PageScreenManager()->push(procScreen);
-			});
-			return stereoShaderChoice;
-		}).EnabledFunc(enableStereo);
-
-		const ShaderInfo *shaderInfo = GetPostShaderInfo(g_Config.sStereoToMonoShader);
-		if (shaderInfo) {
-			for (size_t i = 0; i < ARRAY_SIZE(shaderInfo->settings); ++i) {
-				auto &setting = shaderInfo->settings[i];
-				if (setting.name.empty()) {
-					continue;
-				}
-				// The value is looked up (and added if missing) when the slider is created, not when the page is built.
-				page->Custom({ I18NCat::POSTSHADERS, setting.name.c_str() }, [host, shaderInfo, i](UI::ViewGroup *parent) -> UI::View * {
-					auto &setting = shaderInfo->settings[i];
-					std::string key = StringFromFormat("%sSettingCurrentValue%d", shaderInfo->section.c_str(), i + 1);
-					bool keyExisted = g_Config.mPostShaderSetting.find(key) != g_Config.mPostShaderSetting.end();
-					auto &value = g_Config.mPostShaderSetting[key];
-					if (!keyExisted)
-						value = setting.value;
-					return parent->Add(new PopupSliderChoiceFloat(&value, setting.minValue, setting.maxValue, setting.value, T(I18NCat::POSTSHADERS, setting.name), setting.step, host->PageScreenManager()));
-				}).EnabledFunc([=] {
-					return !g_Config.bSkipBufferEffects && enableStereo();
-				});
-			}
-		}
-	}
 }
 
 static void CreateCrashHistoryList(UI::ViewGroup *crashHistory) {

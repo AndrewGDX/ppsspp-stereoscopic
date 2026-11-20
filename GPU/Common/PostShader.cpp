@@ -148,8 +148,7 @@ void LoadPostShaderInfo(Draw::DrawContext *draw, const std::vector<Path> &direct
 				}
 
 				if (section.HasKey("Fragment") && section.HasKey("Vertex") &&
-					(strncasecmp(shaderType.c_str(), "render", shaderType.size()) == 0 ||
-					 strncasecmp(shaderType.c_str(), "StereoToMono", shaderType.size()) == 0)) {
+					strncasecmp(shaderType.c_str(), "render", shaderType.size()) == 0) {
 					// Valid shader!
 					ShaderInfo info{};
 					std::string temp;
@@ -184,12 +183,6 @@ void LoadPostShaderInfo(Draw::DrawContext *draw, const std::vector<Path> &direct
 
 					if (info.parent == "Off")
 						info.parent.clear();
-
-					if (strncasecmp(shaderType.c_str(), "stereotomono", shaderType.size()) == 0) {
-						info.isStereo = true;
-						info.isUpscalingFilter = false;
-						info.parent.clear();
-					}
 
 					for (size_t i = 0; i < ARRAY_SIZE(info.settings); ++i) {
 						auto &setting = info.settings[i];

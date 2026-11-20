@@ -483,6 +483,9 @@ public:
 	void NotifyRenderResized(const DisplayLayoutConfig &config, int msaaLevel);
 	virtual void NotifyDisplayResized();
 	void NotifyConfigChanged();
+	int GetFramebufferLayers() const;
+	// The framebuffers need recreating with GetFramebufferLayers() layers, and the helper shaders sample them differently.
+	void NotifyLayersChanged();
 
 	void CheckPostShaders(const DisplayLayoutConfig &config);
 
@@ -634,8 +637,6 @@ protected:
 	VirtualFramebuffer *CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format);
 
 	void UpdateFramebufUsage(VirtualFramebuffer *vfb) const;
-
-	int GetFramebufferLayers() const;
 
 	static void SetColorUpdated(VirtualFramebuffer *dstBuffer, int skipDrawReason) {
 		dstBuffer->memoryUpdated = false;

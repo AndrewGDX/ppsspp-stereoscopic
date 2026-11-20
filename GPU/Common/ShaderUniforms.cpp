@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "ShaderUniforms.h"
 #include "Common/System/Display.h"
@@ -73,6 +74,8 @@ void CalcTexClamp(float texClamp[4], float texClampOffset[2]) {
 	texClampOffset[0] = gstate_c.curTextureXOffset * invW;
 	texClampOffset[1] = gstate_c.curTextureYOffset * invH;
 }
+
+static void UpdateStereoUniforms(UB_VS_FS_Base *ub);
 
 void BaseUpdateUniforms(UB_VS_FS_Base *ub, uint64_t dirtyUniforms, bool useBufferedRendering, bool pixelMapped) {
 	if (dirtyUniforms & DIRTY_TEXENV) {
@@ -184,6 +187,10 @@ void BaseUpdateUniforms(UB_VS_FS_Base *ub, uint64_t dirtyUniforms, bool useBuffe
 	if (dirtyUniforms & DIRTY_DEPAL) {
 		ub->depal_mask_shift_off_fmt = PackDepalBits(pixelMapped);
 	}
+
+	if (dirtyUniforms & DIRTY_STEREO) {
+		UpdateStereoUniforms(ub);
+	}
 }
 
 bool GuessVRDrawingHUD(bool is2D, bool flatScreen) {
@@ -275,6 +282,77 @@ void VRUpdateUniforms(UB_VS_FS_Base *base, UB_VS_VR *vr, uint64_t dirtyUniforms)
 		memcpy(base->view, leftEyeView, sizeof(base->view));
 		memcpy(vr->viewRight, rightEyeView, sizeof(vr->viewRight));
 	}
+}
+
+static StereoDrawClass ClassifyStereoDraw() {
+	if (gstate.isModeClear()) {
+		// Shifting a clear would leave a strip at the edge uncleared.
+		return StereoDrawClass::FLAT;
+	}
+	const bool through = gstate.isModeThrough();
+	// A projection with a constant w (orthographic) has no depth to shift by, like through mode.
+	const bool ortho = !through && gstate.projMatrix[3] == 0.0f && gstate.projMatrix[7] == 0.0f && gstate.projMatrix[11] == 0.0f;
+	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
+	if (through || ortho) {
+		// A framebuffer drawn in 2D (a post effect, or compositing) is already in stereo.
+		if (detection == StereoscopyUIDetection::OFF || (gstate.isTextureMapEnabled() && gstate_c.textureIsFramebuffer)) {
+			return StereoDrawClass::FLAT;
+		}
+		return through && gstate_c.stereoFullscreen2D ? StereoDrawClass::SECOND_LAYER : StereoDrawClass::UI;
+	}
+	if (detection == StereoscopyUIDetection::ADVANCED && !gstate.isDepthTestEnabled() && !gstate.isDepthWriteEnabled()) {
+		return StereoDrawClass::UI;
+	}
+	return StereoDrawClass::WORLD;
+}
+
+void UpdateStereoDrawClass() {
+	if (!gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+		return;
+	}
+	const StereoDrawClass drawClass = ClassifyStereoDraw();
+	if (drawClass != gstate_c.stereoDrawClass) {
+		gstate_c.stereoDrawClass = drawClass;
+		gstate_c.Dirty(DIRTY_STEREO);
+	}
+}
+
+static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
+	// The eyes move apart by the separation, which in clip space is the share of the target's half width.
+	// The dominant eye stays put, and the other moves all of it.
+	const float separation = g_Config.fStereoscopySeparation * (1.0f / 3000.0f);
+	float left = -separation;
+	float right = separation;
+	switch ((StereoscopyDominantEye)g_Config.iStereoscopyDominantEye) {
+	case StereoscopyDominantEye::LEFT:
+		left = 0.0f;
+		right = 2.0f * separation;
+		break;
+	case StereoscopyDominantEye::RIGHT:
+		left = -2.0f * separation;
+		right = 0.0f;
+		break;
+	default:
+		break;
+	}
+
+	const StereoDrawClass drawClass = gstate_c.stereoDrawClass;
+	if (drawClass == StereoDrawClass::FLAT) {
+		left = 0.0f;
+		right = 0.0f;
+	}
+	ub->stereoEyeScale[0] = left;
+	ub->stereoEyeScale[1] = right;
+	ub->stereoConvergence = g_Config.fStereoscopyConvergence;
+	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::SECOND_LAYER) ? 1.0f : 0.0f;
+	// At most the separation either way, like the far distance.
+	const int depth = drawClass == StereoDrawClass::SECOND_LAYER ? g_Config.iStereoscopySecondLayerParallax : g_Config.iStereoscopyUIDepth;
+	ub->stereoUIDepth = (float)std::clamp(depth, -100, 100) * 0.01f;
+	// Unsafe and advanced detection also put 3D vertices nearer than the threshold (as a share of the
+	// convergence distance) at the UI depth.
+	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
+	const bool useThreshold = drawClass == StereoDrawClass::WORLD && (detection == StereoscopyUIDetection::UNSAFE || detection == StereoscopyUIDetection::ADVANCED);
+	ub->stereoUIThresholdW = useThreshold ? (float)g_Config.iStereoscopyUIDetectionThreshold * 0.001f * g_Config.fStereoscopyConvergence : -std::numeric_limits<float>::max();
 }
 
 void DirtyDepalForDraw(bool pixelMapped) {

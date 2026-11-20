@@ -210,6 +210,18 @@ SoftwareTransformAction RunSoftwareTransform(SoftwareTransformParams &params, in
 			// The w of uv is also never used (hardcoded to 1.0.)
 		}
 
+		if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+			// Full screen images (like a menu background) can get a depth of their own.
+			float minX = 4096.0f, minY = 4096.0f, maxX = 0.0f, maxY = 0.0f;
+			for (int index = 0; index < numDecodedVerts; index++) {
+				minX = std::min(minX, transformed[index].x);
+				maxX = std::max(maxX, transformed[index].x);
+				minY = std::min(minY, transformed[index].y);
+				maxY = std::max(maxY, transformed[index].y);
+			}
+			gstate_c.stereoFullscreen2D = maxX - minX >= 0.9f * (float)gstate_c.curRTWidth && maxY - minY >= 0.9f * (float)gstate_c.curRTHeight;
+		}
+
 		// Here's the best opportunity to try to detect rectangles used to clear the screen, and
 		// replace them with real clears. This can provide a speedup on certain mobile chips.
 		//

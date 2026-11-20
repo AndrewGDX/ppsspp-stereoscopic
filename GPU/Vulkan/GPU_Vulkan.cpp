@@ -241,9 +241,6 @@ u32 GPU_Vulkan::CheckGPUFeatures() const {
 		if (IsVREnabled() && GetVRPassesCount() > 1 && draw_->GetDeviceCaps().multiViewSupported) {
 			features |= GPU_USE_SINGLE_PASS_STEREO;
 		}
-	} else if (g_Config.bStereoRendering && draw_->GetDeviceCaps().multiViewSupported) {
-		features |= GPU_USE_SINGLE_PASS_STEREO;
-		features |= GPU_USE_SIMPLE_STEREO_PERSPECTIVE;
 	}
 
 	// Attempt to workaround #17386

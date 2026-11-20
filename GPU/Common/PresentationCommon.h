@@ -92,6 +92,12 @@ struct ShaderInfo;
 struct OverlayLayout;
 class TextureCacheCommon;
 
+// Stereoscopic 3D on a normal display: both eyes are drawn in one pass, into two-layer framebuffers, and
+// presented side by side or top and bottom. The backend can do it (not software rendering or VR).
+bool StereoscopySupported(Draw::DrawContext *draw);
+// Supported and turned on. Needs the framebuffers, so not with skip buffer effects.
+bool StereoscopyEnabled(Draw::DrawContext *draw);
+
 enum class OutputFlags {
 	DEFAULT = 0,
 	LINEAR = 0x0000,
@@ -187,7 +193,6 @@ protected:
 	void DestroyDeviceObjects();
 
 	void DestroyPostShader();
-	void DestroyStereoShader();
 
 	static void ShowPostShaderError(const std::string &errorString);
 
@@ -232,9 +237,6 @@ protected:
 	std::vector<ShaderInfo> postShaderInfo_;
 	std::vector<Draw::Framebuffer *> previousFramebuffers_;
 	
-	Draw::Pipeline *stereoPipeline_ = nullptr;
-	ShaderInfo *stereoShaderInfo_ = nullptr;
-
 	int previousIndex_ = 0;
 	PostShaderUniforms previousUniforms_{};
 
@@ -267,4 +269,7 @@ protected:
 	Draw::Framebuffer *postShaderOutput_ = nullptr;
 	FRect rc_;
 	OutputFlags outputFlags_ = OutputFlags::DEFAULT;
+	// Stereoscopy: each eye goes to its viewport, with rc_ relative to it.
+	bool stereoscopyOutput_ = false;
+	FRect stereoViewports_[2]{};
 };

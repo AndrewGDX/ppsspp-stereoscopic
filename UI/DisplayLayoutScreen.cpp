@@ -420,14 +420,6 @@ void DisplayLayoutScreen::CreateViews() {
 		});
 	}
 
-	Draw::DrawContext *draw = screenManager()->getDrawContext();
-
-	bool multiViewSupported = draw->GetDeviceCaps().multiViewSupported;
-
-	auto enableStereo = [=]() -> bool {
-		return g_Config.bStereoRendering && multiViewSupported;
-	};
-
 	leftColumn->SetRoundCorners();
 
 	leftColumn->Add(new ItemHeader(gr->T("Postprocessing shaders")));
@@ -463,7 +455,7 @@ void DisplayLayoutScreen::CreateViews() {
 		}
 		postProcChoice_->OnClick.Add([=](EventParams &e) {
 			auto gr = GetI18NCategory(I18NCat::GRAPHICS);
-			auto procScreen = new PostProcScreen(gr->T("Postprocessing shaders"), i, false);
+			auto procScreen = new PostProcScreen(gr->T("Postprocessing shaders"), i);
 			procScreen->SetHasDropShadow(false);
 			procScreen->OnChoice.Handle(this, &DisplayLayoutScreen::OnPostProcShaderChange);
 			if (e.v)
@@ -471,7 +463,7 @@ void DisplayLayoutScreen::CreateViews() {
 			screenManager()->push(procScreen);
 		});
 		postProcChoice_->SetEnabledFunc([=] {
-			return !g_Config.bSkipBufferEffects && !enableStereo();
+			return !g_Config.bSkipBufferEffects;
 		});
 
 		if (i < g_Config.vPostShaderNames.size()) {
@@ -574,7 +566,7 @@ void DisplayLayoutScreen::CreateViews() {
 						settingValue->SetLiveUpdate(true);
 						settingValue->SetHasDropShadow(false);
 						settingValue->SetEnabledFunc([=] {
-							return !g_Config.bSkipBufferEffects && !enableStereo();
+							return !g_Config.bSkipBufferEffects;
 						});
 					}
 				}
@@ -603,8 +595,6 @@ void PostProcScreen::CreateViews() {
 	for (int i = 0; i < (int)shaders_.size(); i++) {
 		if (!shaders_[i].visible)
 			continue;
-		if (shaders_[i].isStereo != showStereoShaders_)
-			continue;
 		if (shaders_[i].section == selectedName)
 			selected = (int)indexTranslation_.size();
 		items.push_back(std::string(ps->T(shaders_[i].section.c_str(), shaders_[i].name.c_str())));
@@ -619,20 +609,13 @@ void PostProcScreen::OnCompleted(DialogResult result) {
 		return;
 	const std::string &value = shaders_[indexTranslation_[listView_->GetSelected()]].section;
 	// I feel this logic belongs more in the caller, but eh...
-	if (showStereoShaders_) {
-		if (g_Config.sStereoToMonoShader != value) {
-			g_Config.sStereoToMonoShader = value;
+	if (id_ < (int)g_Config.vPostShaderNames.size()) {
+		if (g_Config.vPostShaderNames[id_] != value) {
+			g_Config.vPostShaderNames[id_] = value;
 			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 		}
 	} else {
-		if (id_ < (int)g_Config.vPostShaderNames.size()) {
-			if (g_Config.vPostShaderNames[id_] != value) {
-				g_Config.vPostShaderNames[id_] = value;
-				System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
-			}
-		} else {
-			g_Config.vPostShaderNames.push_back(value);
-			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
-		}
+		g_Config.vPostShaderNames.push_back(value);
+		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 	}
 }

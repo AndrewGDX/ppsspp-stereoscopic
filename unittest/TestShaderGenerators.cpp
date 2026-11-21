@@ -15,6 +15,7 @@
 #include "GPU/Common/ReinterpretFramebuffer.h"
 #include "GPU/Common/StencilCommon.h"
 #include "GPU/Common/DepalettizeShaderCommon.h"
+#include "GPU/Common/Draw2D.h"
 
 #include "UnitTest.h"
 
@@ -222,6 +223,28 @@ bool TestReinterpretShaders() {
 		}
 	}
 
+	delete[] buffer;
+	return !failed;
+}
+
+// Multisampled framebuffers only get read sample by sample on Vulkan (and Metal, through Vulkan GLSL).
+bool TestDraw2DSampleShaders() {
+	char *buffer = new char[8192];
+	bool failed = false;
+	ShaderLanguageDesc desc(ShaderLanguage::GLSL_VULKAN);
+	for (bool stereo : { false, true }) {
+		ShaderWriter writer(buffer, desc, ShaderStage::Fragment, Slice<const char *>::empty(), stereo ? ShaderWriterFlags::FS_AUTO_STEREO : ShaderWriterFlags::NONE);
+		GenerateDraw2DCopyColorSample0Fs(writer);
+		std::string errorMessage;
+		if (!TestCompileShader(buffer, ShaderLanguage::GLSL_VULKAN, ShaderStage::Fragment, &errorMessage)) {
+			printf("Error compiling the sample 0 copy shader (stereo %d):\n\n%s\n\n%s\n", (int)stereo, LineNumberString(buffer).c_str(), errorMessage.c_str());
+			failed = true;
+		} else if (stereo && !strstr(buffer, "gl_ViewIndex")) {
+			// Each eye has to copy its own layer.
+			printf("The stereo sample 0 copy shader doesn't read the eye's layer:\n\n%s\n", LineNumberString(buffer).c_str());
+			failed = true;
+		}
+	}
 	delete[] buffer;
 	return !failed;
 }
@@ -542,6 +565,10 @@ bool TestShaderGenerators() {
 	}
 
 	if (!TestDepalShaders()) {
+		return false;
+	}
+
+	if (!TestDraw2DSampleShaders()) {
 		return false;
 	}
 

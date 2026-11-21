@@ -61,6 +61,8 @@ struct Draw2DPipeline {
 
 class ShaderWriter;
 
+Draw2DPipelineInfo GenerateDraw2DCopyColorSample0Fs(ShaderWriter &writer);
+
 class Draw2D {
 public:
 	Draw2D(Draw::DrawContext *draw) : draw_(draw) {}

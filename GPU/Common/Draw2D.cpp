@@ -77,7 +77,9 @@ static const SamplerDef samplersMS[1] = {
 Draw2DPipelineInfo GenerateDraw2DCopyColorSample0Fs(ShaderWriter &writer) {
 	writer.DeclareSamplers(samplersMS);
 	writer.BeginFSMain(Slice<UniformDef>::empty(), varyings);
-	writer.C("  vec4 outColor = texelFetch(tex, ivec3(ivec2(gl_FragCoord.xy), 0), 0);\n");
+	// With stereo, each eye copies its own layer.
+	const char *layer = (writer.Flags() & ShaderWriterFlags::FS_AUTO_STEREO) ? "int(gl_ViewIndex)" : "0";
+	writer.F("  vec4 outColor = texelFetch(tex, ivec3(ivec2(gl_FragCoord.xy), %s), 0);\n", layer);
 	writer.EndFSMain("outColor");
 
 	Draw2DPipelineInfo info{

@@ -64,7 +64,26 @@ frame, full modes keep its aspect ratio (two 16:9 eyes side by side make 32:9, l
 laid out like a mono image would be in the whole frame, so stretching, integer scaling and pillarboxing work
 per eye. Swap eyes swaps the layers there. A mono source (a frame from RAM) is shown to both eyes.
 
-Post shaders, the overlay and Cardboard VR are off while stereoscopy is on.
+Post shaders run on both eyes together: the eyes are first composited side by side (or top and bottom) at
+render resolution, cropped and swapped, into `stereoComposite_`, the chain runs on that with its framebuffers
+twice as wide (or tall), and each eye then shows its half. So a shader sees one image twice the size, and
+effects that depend on the position in the frame (vignette) span both eyes, while ones that sample neighbours
+only bleed across the seam by their radius. The overlay and Cardboard VR are off while stereoscopy is on.
+
+Auto render resolution sizes each eye for its frame: the full modes halve it, the half modes don't (their eye
+is squeezed along one axis only, and keeps the full resolution along the other).
+
+## Performance
+
+Each draw is one instanced draw call for both eyes, so the CPU cost is small: about 3% more per frame on a
+Radeon Pro Vega 20 (Tekken 6, 4x). The GPU does all the work twice, every pixel of every layer, so GPU time
+doubles (1.2 to 2.0 ms there). That's what limits it on integrated GPUs, which also share their power budget
+with the CPU: on the Intel UHD 630 of the same Mac, GPU time went from 6.4 to 10.6 ms a frame, and the
+emulator thread slowed down too, by 60% and more, doing the same work. With Buffer graphics commands set to
+No buffer, the CPU and the GPU take turns (on Metal there's no render thread then, and each frame waits for
+the GPU), so a frame costs their sum, and with vsync, one that misses 16.7 ms can wait for the next
+vblank, which halves the frame rate. Buffering one or two frames lets them overlap. A lower render
+resolution cuts the GPU time the most.
 
 ## Testing
 
@@ -73,6 +92,7 @@ Post shaders, the overlay and Cardboard VR are off while stereoscopy is on.
   backend, checks the whole layered path. The frame dumps too (`frametests.py --variants=...`).
 - The right eye and the layout need the real app: a backbuffer screenshot through the WebSocket debugger
   (`wsdbg`'s `:screenshot`). Use a memstick of its own (`--memstick`), as the app saves appended settings.
+  `--appendconfig` skips `[PostShaderList]`, so for post shaders, write that memstick's `ppsspp.ini` instead.
 - `ShaderGenerators` has a stereoscopy pass (Vulkan GLSL, and HLSL on Windows).
 
 ## Known issues

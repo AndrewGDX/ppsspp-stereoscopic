@@ -367,6 +367,11 @@ if(NOT LIBRETRO AND NOT IOS AND NOT HEADLESS_CROSS AND NOT ANDROID)
 		endif()
 	endif()
 	set(SDL_LIB_TARGET SDL3::SDL3)
+	message(STATUS "Using SDL3")
+endif()
+
+# Apple platforms use the native Cocoa text renderer.
+if(SDL_LIB_TARGET AND NOT APPLE)
 	find_package(SDL3_ttf QUIET)
 	if(NOT SDL3_ttf_FOUND)
 		if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (EXISTS "/usr/bin/apt" OR EXISTS "/usr/bin/apt-get" OR EXISTS "/etc/debian_version"))
@@ -376,7 +381,7 @@ if(NOT LIBRETRO AND NOT IOS AND NOT HEADLESS_CROSS AND NOT ANDROID)
 		endif()
 	endif()
 	set(SDL_TTF_LIB_TARGET SDL3_ttf::SDL3_ttf)
-	message(STATUS "Using SDL3 and SDL3_ttf")
+	message(STATUS "Using SDL3_ttf")
 	add_compile_definitions(USE_SDL3_TTF)
 	find_package(Fontconfig QUIET)
 	if(Fontconfig_FOUND)
@@ -1526,7 +1531,18 @@ if(TargetBin)
 			add_executable(${TargetBin} MACOSX_BUNDLE ${NativeAssets} ${BigFontAssets} ${UIImages} ${AssetCatalog} ${SHADER_FILES} ${THEME_FILE} ${DEBUGGER_FILES} ${WEB_UPLOAD_FILES} ${FLASH0_FILES} ${LANG_FILES} ${NativeAppSource} "ios/Launch Screen.storyboard")
 		else()
 			add_executable(${TargetBin} MACOSX_BUNDLE ${ICON_PATH_ABS} ${NativeAssets} ${BigFontAssets} ${UIImages} ${SHADER_FILES} ${THEME_FILE} ${DEBUGGER_FILES} ${WEB_UPLOAD_FILES} ${FLASH0_FILES} ${LANG_FILES} ${NativeAppSource})
-			file(INSTALL "${CMAKE_SOURCE_DIR}/ext/vulkan/macOS/Frameworks/libMoltenVK.dylib" DESTINATION "${CMAKE_BINARY_DIR}/${TargetBin}.app/Contents/Frameworks/")
+			set_property(TARGET ${TargetBin} APPEND PROPERTY LINK_DEPENDS
+				"${CMAKE_SOURCE_DIR}/macOS/BundleDependencies.cmake"
+				"${CMAKE_SOURCE_DIR}/macOS/Entitlements.plist"
+				"${CMAKE_SOURCE_DIR}/ext/vulkan/macOS/Frameworks/libMoltenVK.dylib"
+			)
+			add_custom_command(TARGET ${TargetBin} POST_BUILD
+				COMMAND ${CMAKE_COMMAND}
+					"-DBUNDLE_DIR=$<TARGET_BUNDLE_DIR:${TargetBin}>"
+					"-DMOLTENVK_LIBRARY=${CMAKE_SOURCE_DIR}/ext/vulkan/macOS/Frameworks/libMoltenVK.dylib"
+					-P "${CMAKE_SOURCE_DIR}/macOS/BundleDependencies.cmake"
+				VERBATIM
+			)
 		endif()
 	elseif(WIN32)
 		add_executable(${TargetBin} WIN32 ${NativeAppSource})

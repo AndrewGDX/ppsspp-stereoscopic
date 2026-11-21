@@ -95,6 +95,35 @@ library such as `/t:CoreUWP`), same MSBuild setup as above:
 & $msbuild "UWP\PPSSPP_UWP.sln" /t:PPSSPP_UWP /p:Configuration=Debug /p:Platform=<platform> /m
 ```
 
+## Portable macOS builds
+
+The SDL app's post-build step copies its non-system dynamic libraries into the app, rewrites their
+install names, verifies the dependencies, and signs the bundle with an ad hoc signature. Copy the
+whole `.app` when distributing it. macOS uses Cocoa for text rendering and does not need SDL3_ttf,
+Fontconfig or FriBidi.
+
+Dependencies must also support the destination macOS version. In particular, a Homebrew SDL3 built
+for a newer macOS still requires that version after bundling. For an Intel Mac running macOS 13,
+build SDL3 from its release sources with the same 12.0 deployment target as PPSSPP:
+
+```bash
+cmake -S /path/to/SDL3 -B /tmp/ppsspp-sdl3-build \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$HOME/.local/ppsspp-macos12" \
+  -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF \
+  -DSDL_HIDAPI_LIBUSB=OFF
+cmake --build /tmp/ppsspp-sdl3-build -j16
+cmake --install /tmp/ppsspp-sdl3-build
+cmake -S . -B build-macbook12 -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  -DSDL3_DIR="$HOME/.local/ppsspp-macos12/lib/cmake/SDL3" \
+  -DUSE_SYSTEM_LIBPNG=OFF -DHEADLESS=ON -DUNITTEST=ON
+cmake --build build-macbook12 -j16
+```
+
+The app is `build-macbook12/PPSSPPSDL.app`. Check the executable and every bundled library with
+`otool -L` for external dependencies and `otool -l` for `LC_BUILD_VERSION` / `minos` before sharing.
+
 ## iOS simulator build
 
 On an Apple Silicon Mac, `./b-ios-simulator.sh` builds the App Store variant for the iOS simulator

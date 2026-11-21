@@ -1112,6 +1112,7 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/PauseScreen.cpp \
   $(SRC)/UI/SavedataScreen.cpp \
   $(SRC)/UI/ShareFiles.cpp \
+  $(SRC)/UI/StereoscopyOverlay.cpp \
   $(SRC)/UI/Store.cpp \
   $(SRC)/UI/SystemInfoScreen.cpp \
   $(SRC)/UI/GamepadEmu.cpp \

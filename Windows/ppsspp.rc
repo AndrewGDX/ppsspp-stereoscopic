@@ -584,6 +584,7 @@ BEGIN
         MENUITEM "Language...",                             ID_OPTIONS_LANGUAGE
         MENUITEM "Control Mapping...",                      ID_OPTIONS_CONTROLS
         MENUITEM "Display Layout && Effects",               ID_OPTIONS_DISPLAY_LAYOUT
+        MENUITEM "Stereoscopy Overlay",                     ID_OPTIONS_STEREOSCOPY_OVERLAY
         MENUITEM "More Settings...",                        ID_OPTIONS_MORE_SETTINGS
         MENUITEM "", 0, MFT_SEPARATOR
         MENUITEM "Fullscreen",                              ID_OPTIONS_FULLSCREEN

@@ -762,6 +762,17 @@ bool StereoscopyEnabled(Draw::DrawContext *draw) {
 	return g_Config.iStereoscopyMode != (int)StereoscopyMode::OFF && !g_Config.bSkipBufferEffects && StereoscopySupported(draw);
 }
 
+bool GetStereoscopyEyeViewports(const DisplayLayoutConfig &config, float pixelWidth, float pixelHeight, FRect viewports[2]) {
+	// The flag follows the setting on the next frame, so this matches how the game was drawn.
+	const StereoscopyMode mode = (StereoscopyMode)g_Config.iStereoscopyMode;
+	if (!gstate_c.Use(GPU_USE_STEREOSCOPY) || mode == StereoscopyMode::OFF) {
+		return false;
+	}
+	FRect eyeFrame;
+	GetStereoscopyLayout(mode, GetScreenFrame(config.bIgnoreScreenInsets, pixelWidth, pixelHeight), &eyeFrame, viewports);
+	return true;
+}
+
 void PresentationCommon::SourceBlank() {
 	DoRelease(srcTexture_);
 	DoRelease(srcFramebuffer_);

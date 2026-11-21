@@ -80,6 +80,7 @@
     <ClCompile Include="RetroAchievementScreens.cpp" />
     <ClCompile Include="SavedataScreen.cpp" />
     <ClCompile Include="ShareFiles.cpp" />
+    <ClCompile Include="StereoscopyOverlay.cpp" />
     <ClCompile Include="Store.cpp" />
     <ClCompile Include="AudioCommon.cpp" />
     <ClCompile Include="SystemInfoScreen.cpp" />
@@ -161,6 +162,7 @@
     <ClInclude Include="RetroAchievementScreens.h" />
     <ClInclude Include="SavedataScreen.h" />
     <ClInclude Include="ShareFiles.h" />
+    <ClInclude Include="StereoscopyOverlay.h" />
     <ClInclude Include="Store.h" />
     <ClInclude Include="SystemInfoScreen.h" />
     <ClInclude Include="TabbedDialogScreen.h" />

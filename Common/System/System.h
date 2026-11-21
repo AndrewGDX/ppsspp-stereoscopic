@@ -333,6 +333,7 @@ enum class UIMessage {
 	ADHOC_SERVER_LIST_CHANGED,
 	SAVESTATE_SLOT_SAVED,  // A save state save finished: written, failed or refused.
 	SOFT_KEYBOARD_HIDDEN,  // The platform closed a soft keyboard forced by System_SetSoftKeyboardForced.
+	TOGGLE_STEREOSCOPY_OVERLAY,
 };
 
 std::string System_GetProperty(SystemProperty prop);

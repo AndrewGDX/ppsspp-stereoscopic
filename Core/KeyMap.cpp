@@ -517,6 +517,7 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_SCREENSHOT, "Screenshot"},
 	{VIRTKEY_MUTE_TOGGLE, "Mute toggle"},
 	{VIRTKEY_CREATE_FRAME_DUMP, "Create frame dump"},
+	{VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY, "Stereoscopy overlay"},
 
 #ifdef OPENXR
 	{VIRTKEY_VR_CAMERA_ADJUST, "VR camera adjust"},
@@ -851,6 +852,12 @@ static void ApplyLegacyAxisRemap(MultiInputMapping *input) {
 	}
 }
 
+// An empty mapping isn't saved, so a missing line usually means "nothing mapped". These keys came later, and
+// keep their defaults when the line is missing (an older ini). Their empty mappings are saved as empty lines.
+static bool KeepsDefaultIfMissing(int key) {
+	return key == VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY;
+}
+
 // TODO: Make the ini format nicer.
 void LoadFromIni(IniFile &file) {
 	RestoreDefault();
@@ -863,7 +870,9 @@ void LoadFromIni(IniFile &file) {
 	Section *controls = file.GetOrCreateSection("ControlMapping");
 	for (size_t i = 0; i < ARRAY_SIZE(psp_button_names); i++) {
 		std::string value;
-		controls->Get(psp_button_names[i].name, &value);
+		if (!controls->Get(psp_button_names[i].name, &value) && KeepsDefaultIfMissing(psp_button_names[i].key)) {
+			continue;
+		}
 
 		// Erase default mapping
 		g_controllerMap.erase(psp_button_names[i].key);
@@ -905,7 +914,11 @@ void SaveToIni(IniFile &file) {
 				value += ",";
 		}
 
-		controls->Set(psp_button_names[i].name, value, "");
+		if (KeepsDefaultIfMissing(psp_button_names[i].key)) {
+			controls->Set(psp_button_names[i].name, value);
+		} else {
+			controls->Set(psp_button_names[i].name, value, "");
+		}
 	}
 }
 

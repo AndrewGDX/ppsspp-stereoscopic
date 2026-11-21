@@ -124,6 +124,8 @@ list(APPEND UISource
 	ShareFiles.cpp
 	SystemInfoScreen.h
 	SystemInfoScreen.cpp
+	StereoscopyOverlay.h
+	StereoscopyOverlay.cpp
 	Store.h
 	Store.cpp
 	UploadScreen.h

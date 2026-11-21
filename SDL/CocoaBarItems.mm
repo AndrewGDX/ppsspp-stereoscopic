@@ -473,6 +473,9 @@ static bool CanUseSaveStates(bool isSaveAction) {
     [self addItem:DesktopUI("Display Layout && Effects") to:menu action:^{
         System_PostUIMessage(UIMessage::SHOW_DISPLAY_LAYOUT_EDITOR);
     }];
+    [self addItem:DesktopUI("Stereoscopy Overlay") to:menu action:^{
+        System_PostUIMessage(UIMessage::TOGGLE_STEREOSCOPY_OVERLAY);
+    }].enabledWhen = ^BOOL { return InGame(); };
     [self addItem:DesktopUI("Language...") to:menu action:^{
         System_PostUIMessage(UIMessage::SHOW_LANGUAGE_SCREEN);
     }];

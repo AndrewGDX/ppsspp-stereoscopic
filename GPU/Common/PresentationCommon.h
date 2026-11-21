@@ -98,6 +98,9 @@ enum class StereoscopyMode : int;
 bool StereoscopySupported(Draw::DrawContext *draw);
 // Supported and turned on. Needs the framebuffers, so not with skip buffer effects.
 bool StereoscopyEnabled(Draw::DrawContext *draw);
+// Where each eye of the frame goes on the primary output, in pixels, for UI drawn into both eyes. False
+// when this frame isn't stereo.
+bool GetStereoscopyEyeViewports(const DisplayLayoutConfig &config, float pixelWidth, float pixelHeight, FRect viewports[2]);
 
 enum class OutputFlags {
 	DEFAULT = 0,

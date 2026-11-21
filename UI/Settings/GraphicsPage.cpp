@@ -36,10 +36,12 @@
 #include "Core/System.h"
 #include "GPU/Common/PostShader.h"
 #include "GPU/Common/PresentationCommon.h"
+#include "UI/ControlMappingScreen.h"
 #include "UI/DevScreens.h"
 #include "UI/DisplayLayoutScreen.h"
 #include "UI/MiscScreens.h"
 #include "UI/SettingsPage.h"
+#include "UI/StereoscopyOverlay.h"
 #include "UI/Settings/MainSettingsPages.h"
 
 static bool UsingHardwareTextureScaling() {
@@ -314,15 +316,9 @@ void BuildGraphicsSettings(SettingsPage *page) {
 	if (deviceType != DEVICE_TYPE_VR) {
 		page->Header("Stereoscopy");
 		// The backend doesn't change without a restart, but software rendering and skip buffer effects can.
-		auto stereoscopyAvailable = [draw]() {
-			return StereoscopySupported(draw) && !g_Config.bSkipBufferEffects;
-		};
-		auto stereoscopyOn = [stereoscopyAvailable]() {
-			return stereoscopyAvailable() && g_Config.iStereoscopyMode != (int)StereoscopyMode::OFF;
-		};
-		auto uiDetectionOn = [stereoscopyOn]() {
-			return stereoscopyOn() && g_Config.iStereoscopyUIDetectionMode != (int)StereoscopyUIDetection::OFF;
-		};
+		auto stereoscopyAvailable = [draw]() { return StereoscopyAvailable(draw); };
+		auto stereoscopyOn = [draw]() { return StereoscopyOn(draw); };
+		auto uiDetectionOn = [draw]() { return StereoscopyUIDetectionOn(draw); };
 		SettingItem &mode = page->Setting(&g_Config.iStereoscopyMode).EnabledFunc(stereoscopyAvailable).OnChange([](UI::EventParams &) {
 			// Takes effect in the running game, which recreates its framebuffers if stereo turns on or off.
 			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
@@ -337,11 +333,14 @@ void BuildGraphicsSettings(SettingsPage *page) {
 		page->Setting(&g_Config.iStereoscopyUIDetectionMode).EnabledFunc(stereoscopyOn);
 		page->Setting(&g_Config.iStereoscopyUIDepth).EnabledFunc(uiDetectionOn).LiveUpdate();
 		page->Setting(&g_Config.iStereoscopySecondLayerParallax).EnabledFunc(uiDetectionOn).LiveUpdate();
-		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([uiDetectionOn]() {
-			// Only unsafe and advanced detection look at the depth.
-			const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
-			return uiDetectionOn() && (detection == StereoscopyUIDetection::UNSAFE || detection == StereoscopyUIDetection::ADVANCED);
+		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([draw]() {
+			return StereoscopyUIThresholdOn(draw);
 		}).LiveUpdate();
+		// The overlay that changes these in game.
+		page->Setting(&g_Config.iStereoscopyOverlayPosition);
+		page->Choice("Overlay hotkey").OpensScreen().OnClick([host](UI::EventParams &) {
+			host->PageScreenManager()->push(new ControlMappingScreen(host->PageGamePath()));
+		}).Hint({I18NCat::GRAPHICS, "StereoscopyOverlayHotkey Tip", "Opens the overlay in game. Set it under Emulator controls."});
 	}
 
 	page->Header("Frame Rate Control");

@@ -928,6 +928,7 @@ static constexpr const char *skipGPUReadbackModeNames[] = { "No", "Skip", "Copy 
 static constexpr const char *stereoscopyModeNames[] = { "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)" };
 static constexpr const char *stereoscopyDominantEyeNames[] = { "None", "Left", "Right" };
 static constexpr const char *stereoscopyUIDetectionNames[] = { "Off", "Unsafe", "Safe", "Advanced" };
+static constexpr const char *stereoscopyOverlayPositionNames[] = { "Center left", "Center right", "Top center", "Bottom center" };
 static constexpr const char *depthRasterModeNames[] = { "Auto", "Low", "Off", "Always on" };
 static constexpr const char *frameRateLimit30Names[] = { "Auto", "Always", "Off" };
 static constexpr const char *bloomHackNames[] = { "Off", "Safe", "Balanced", "Aggressive" };
@@ -1012,6 +1013,8 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Second Layer Parallax").Range(-100, 100),
 	ConfigSetting("StereoscopyUIDetectionThreshold", SETTING(g_Config, iStereoscopyUIDetectionThreshold), 0, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "UI Detection Threshold").Range(0, 1000),
+	ConfigSetting("StereoscopyOverlayPosition", SETTING(g_Config, iStereoscopyOverlayPosition), (int)StereoscopyOverlayPosition::CENTER_LEFT, CfgFlag::DEFAULT)
+		.Label(I18NCat::GRAPHICS, "Overlay position").Choices(stereoscopyOverlayPositionNames),
 	// Read before the new settings, which use them as defaults.
 	ConfigSetting("FrameRate", SETTING(g_Config, iLegacyFpsLimit1), 0, CfgFlag::PER_GAME | CfgFlag::DONT_SAVE),
 	ConfigSetting("FrameRate2", SETTING(g_Config, iLegacyFpsLimit2), -1, CfgFlag::PER_GAME | CfgFlag::DONT_SAVE),

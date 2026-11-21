@@ -437,6 +437,7 @@ public:
 	int iStereoscopyUIDepth;
 	int iStereoscopySecondLayerParallax;
 	int iStereoscopyUIDetectionThreshold;
+	int iStereoscopyOverlayPosition;  // StereoscopyOverlayPosition. Not per game.
 
 	bool bShaderChainRequires60FPS;
 	std::string sTextureShaderName;

@@ -356,6 +356,14 @@ enum class StereoscopyUIDetection : int {
 	ADVANCED,
 };
 
+// Where the in-game stereoscopy overlay goes, in each eye.
+enum class StereoscopyOverlayPosition : int {
+	CENTER_LEFT,
+	CENTER_RIGHT,
+	TOP_CENTER,
+	BOTTOM_CENTER,
+};
+
 enum class RemoteISOShareType : int {
 	RECENT,
 	LOCAL_FOLDER,

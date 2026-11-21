@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <list>
 #include <memory>
 #include <optional>
@@ -40,6 +41,7 @@ class AsyncImageFileView;
 class ImposeHomeScreen;
 class GameBootAnimation;
 class ChatMenu;
+class StereoscopyOverlay;
 class ImDebugger;
 struct ImCommand;
 struct ImGuiContext;
@@ -65,6 +67,7 @@ public:
 	// We also need to do some special handling of queued UI events to handle closing the chat window.
 	bool key(const KeyInput &key) override;
 	bool touch(const TouchInput &key) override;
+	void axis(const AxisInput &axis) override;
 
 	void deviceLost() override;
 	void deviceRestored(Draw::DrawContext *draw) override;
@@ -95,6 +98,10 @@ private:
 	Bounds PSPScreenBounds() const;
 	void OnDevTools(UI::EventParams &params);
 	void OpenChat(bool focus);
+	void ToggleStereoscopyOverlay();
+	void CloseStereoscopyOverlay();
+	void renderStereoscopyOverlay();
+	void StereoscopyOverlayTouch(TouchInput touch);
 
 	void HandleFlip();
 	void ProcessGameBoot(const Path &filename);
@@ -165,6 +172,12 @@ private:
 	bool releaseMapperInput_ = false;
 
 	UI::Button *cardboardDisableButton_ = nullptr;
+
+	// While it's open, the game gets no input. The flag is read by the control mapper's callbacks.
+	std::unique_ptr<StereoscopyOverlay> stereoOverlay_;
+	std::atomic<bool> stereoOverlayOpen_{ false };
+	// The eye a touch on the overlay went down in, which the rest of it stays in.
+	int stereoOverlayTouchEye_ = 0;
 
 	std::string extraAssertInfoStr_;
 

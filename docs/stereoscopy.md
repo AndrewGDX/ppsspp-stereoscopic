@@ -73,6 +73,28 @@ only bleed across the seam by their radius. The overlay and Cardboard VR are off
 Auto render resolution sizes each eye for its frame: the full modes halve it, the half modes don't (their eye
 is squeezed along one axis only, and keeps the full resolution along the other).
 
+## Settings overlay
+
+`UI/StereoscopyOverlay.cpp` changes the settings in game, without pausing it. It opens and closes with the
+`Stereoscopy overlay` hotkey (Emulator controls; Ctrl+Shift+F1, or L1+L2 on XInput and SDL pads) or Game
+Settings > Stereoscopy Overlay in the desktop menus. L2 alone pauses, so it has to go down last. The hotkey
+keeps its default in a `controls.ini` from before it existed (`KeepsDefaultIfMissing` in `KeyMap.cpp`).
+
+- **Input.** The overlay takes the keys and axes mapped to the PSP's buttons (D-pad and left stick move and
+  change, the confirm button cycles a choice, Triangle restores the default, the cancel button closes), plus
+  the arrows, Enter and Escape. The control mapper still gets everything, as it has to see the hotkey, but
+  EmuScreen drops button presses, sticks and virtual keys other than the hotkey while it's open, in the
+  mapper's callbacks. Dropping them there rather than when queued vkeys are processed matters: Escape both
+  closes the overlay and maps to Pause, and the overlay is already closed by the time the queue runs.
+- **Changes** apply right away (the mode posts `GPU_CONFIG_CHANGED`, the rest are uniforms). The config is
+  saved once, on close, if anything changed, to the game's ini when it has one. The header says which.
+- **Drawing.** It's laid out for the whole screen in UI units, then drawn once per eye with that eye's
+  viewport (`GetStereoscopyEyeViewports`), so the display's stretch of a half mode eye gives it the right
+  aspect. Both eyes get the same image, which puts it at screen depth regardless of the UI depth. Touches are
+  mapped back through the eye they land in. Without stereoscopy it's drawn once.
+- **Position** (`StereoscopyOverlayPosition`, global): center left or right is a column, top or bottom center
+  a strip with the settings in two columns. Everything scales down together if it doesn't fit.
+
 ## Performance
 
 Each draw is one instanced draw call for both eyes, so the CPU cost is small: about 3% more per frame on a
@@ -94,6 +116,9 @@ resolution cuts the GPU time the most.
   (`wsdbg`'s `:screenshot`). Use a memstick of its own (`--memstick`), as the app saves appended settings.
   `--appendconfig` skips `[PostShaderList]`, so for post shaders, write that memstick's `ppsspp.ini` instead.
 - `ShaderGenerators` has a stereoscopy pass (Vulkan GLSL, and HLSL on Windows).
+- The debugger's screenshot is taken before the UI is drawn, so it doesn't show the settings overlay.
+  `ScheduleScreenshot` with `ScreenshotType::Output` does, as it reads the backbuffer at the end of the frame.
+  Feeding `NativeKey`/`NativeAxis` from a local hook in `EmuScreen::update` drives the hotkey through the mapper.
 
 ## Known issues
 

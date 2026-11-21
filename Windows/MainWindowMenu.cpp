@@ -108,6 +108,7 @@ namespace MainWindow {
 		EnableMenuItem(menu, ID_DEBUG_SHOWDEBUGSTATISTICS, debugEnable);
 		EnableMenuItem(menu, ID_DEBUG_EXTRACTFILE, menuEnable);
 		EnableMenuItem(menu, ID_DEBUG_MEMORYBASE, menuInGameEnable);
+		EnableMenuItem(menu, ID_OPTIONS_STEREOSCOPY_OVERLAY, menuInGameEnable);
 		EnableMenuItem(menu, ID_DEBUG_DISASSEMBLY, debugEnable);
 		EnableMenuItem(menu, ID_DEBUG_MEMORYVIEW, debugEnable);
 		EnableMenuItem(menu, ID_DEBUG_GEDEBUGGER, debugEnable);
@@ -261,6 +262,7 @@ namespace MainWindow {
 		TranslateMenuItem(menu, ID_OPTIONS_MORE_SETTINGS);
 		TranslateMenuItem(menu, ID_OPTIONS_CONTROLS);
 		TranslateMenuItem(menu, ID_OPTIONS_DISPLAY_LAYOUT);
+		TranslateMenuItem(menu, ID_OPTIONS_STEREOSCOPY_OVERLAY);
 
 		// Movie menu
 		TranslateMenuItem(menu, ID_FILE_DUMPFRAMES);
@@ -734,6 +736,10 @@ namespace MainWindow {
 
 		case ID_OPTIONS_DISPLAY_LAYOUT:
 			System_PostUIMessage(UIMessage::SHOW_DISPLAY_LAYOUT_EDITOR);
+			break;
+
+		case ID_OPTIONS_STEREOSCOPY_OVERLAY:
+			System_PostUIMessage(UIMessage::TOGGLE_STEREOSCOPY_OVERLAY);
 			break;
 
 

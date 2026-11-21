@@ -374,6 +374,14 @@ static const DefMappingStruct defaultVRRightController[] = {
 	{VIRTKEY_AXIS_X_MAX, NKCODE_DPAD_RIGHT},
 };
 
+static void SetDefaultCombo(int pspKey, std::initializer_list<InputMapping> inputs, bool replace) {
+	MultiInputMapping combo;
+	for (const InputMapping &input : inputs) {
+		combo.mappings.push_back(input);
+	}
+	SetInputMapping(pspKey, combo, replace);
+}
+
 static void SetDefaultKeyMap(InputDeviceID deviceId, const DefMappingStruct *array, size_t count, bool replace) {
 	for (size_t i = 0; i < count; i++) {
 		if (array[i].direction == 0)
@@ -401,10 +409,17 @@ void SetDefaultKeyMap(DefaultMaps dmap, bool replace) {
 			SetDefaultKeyMap(DEVICE_ID_KEYBOARD, defaultQwertyKeyboardKeyMap, ARRAY_SIZE(defaultQwertyKeyboardKeyMap), replace);
 			break;
 		}
+		SetDefaultCombo(VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY, {
+			InputMapping(DEVICE_ID_KEYBOARD, NKCODE_CTRL_LEFT), InputMapping(DEVICE_ID_KEYBOARD, NKCODE_SHIFT_LEFT), InputMapping(DEVICE_ID_KEYBOARD, NKCODE_F1),
+		}, false);
 	}
 	break;
 	case DEFAULT_MAPPING_XINPUT:
 		SetDefaultKeyMap(DEVICE_ID_XINPUT_0, defaultXInputKeyMap, ARRAY_SIZE(defaultXInputKeyMap), replace);
+		// L1 + L2. L2 alone pauses, so it has to go down last.
+		SetDefaultCombo(VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY, {
+			InputMapping(DEVICE_ID_XINPUT_0, NKCODE_BUTTON_L1), InputMapping(DEVICE_ID_XINPUT_0, JOYSTICK_AXIS_LTRIGGER, +1),
+		}, false);
 		break;
 	case DEFAULT_MAPPING_SHIELD:
 		SetDefaultKeyMap(DEVICE_ID_PAD_0, defaultShieldKeyMap, ARRAY_SIZE(defaultShieldKeyMap), replace);
@@ -414,6 +429,12 @@ void SetDefaultKeyMap(DefaultMaps dmap, bool replace) {
 		break;
 	case DEFAULT_MAPPING_PAD:
 		SetDefaultKeyMap(DEVICE_ID_PAD_0, defaultPadMap, ARRAY_SIZE(defaultPadMap), replace);
+#if !PPSSPP_PLATFORM(WINDOWS)
+		// L1 + L2 as SDL's gamepads report them. L2 alone pauses, so it has to go down last.
+		SetDefaultCombo(VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY, {
+			InputMapping(DEVICE_ID_PAD_0, NKCODE_BUTTON_6), InputMapping(DEVICE_ID_PAD_0, JOYSTICK_AXIS_LTRIGGER, +1),
+		}, false);
+#endif
 		break;
 	case DEFAULT_MAPPING_ANDROID_PAD:
 		SetDefaultKeyMap(DEVICE_ID_PAD_0, defaultPadMapAndroid, ARRAY_SIZE(defaultPadMapAndroid), replace);

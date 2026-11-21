@@ -136,6 +136,9 @@
     <ClCompile Include="..\..\UI\SavedataScreen.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\UI\StereoscopyOverlay.cpp">
+      <Filter>Screens</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\UI\Store.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
@@ -335,6 +338,9 @@
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="..\..\UI\SavedataScreen.h">
+      <Filter>Screens</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\UI\StereoscopyOverlay.h">
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="..\..\UI\Store.h">

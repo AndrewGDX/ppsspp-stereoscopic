@@ -99,6 +99,7 @@ using namespace std::placeholders;
 #include "UI/DiscordIntegration.h"
 #include "UI/ChatScreen.h"
 #include "UI/DebugOverlay.h"
+#include "UI/StereoscopyOverlay.h"
 
 #if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
 #include "Windows/MainWindow.h"
@@ -122,7 +123,7 @@ public:
 
 // Handles control rotation due to internal screen rotation.
 void EmuScreen::UpdatePSPButtons(uint32_t bitsToSet, uint32_t bitsToClear) {
-	if (!IsOnTop()) {
+	if (!IsOnTop() || stereoOverlayOpen_) {
 		// Auto-release inputs
 		bitsToSet = 0;
 	}
@@ -130,7 +131,7 @@ void EmuScreen::UpdatePSPButtons(uint32_t bitsToSet, uint32_t bitsToClear) {
 }
 
 void EmuScreen::SetPSPAnalog(int iInternalScreenRotation, int stick, float x, float y) {
-	if (!IsOnTop()) {
+	if (!IsOnTop() || stereoOverlayOpen_) {
 		x = 0.0f;
 		y = 0.0f;
 	}
@@ -544,6 +545,11 @@ void EmuScreen::dialogFinished(const Screen *dialog, DialogResult result) {
 void EmuScreen::focusChanged(ScreenFocusChange focusChange) {
 	UIScreen::focusChanged(focusChange);
 
+	if (focusChange == ScreenFocusChange::FOCUS_LOST_TOP) {
+		// Under another screen it would neither be drawn nor get input.
+		CloseStereoscopyOverlay();
+	}
+
 	std::string gameID = g_paramSFO.GetValueString("DISC_ID");
 	if (gameID.empty()) {
 		// startup or shutdown
@@ -659,6 +665,10 @@ void EmuScreen::sendMessage(UIMessage message, const char *value) {
 	} else if (message == UIMessage::SHOW_DISPLAY_LAYOUT_EDITOR && screenManager()->topScreen() == this) {
 		UpdateUIState(UISTATE_PAUSEMENU);
 		screenManager()->push(new DisplayLayoutScreen(gamePath_));
+	} else if (message == UIMessage::TOGGLE_STEREOSCOPY_OVERLAY && screenManager()->topScreen() == this) {
+		if (PSP_IsInited()) {
+			ToggleStereoscopyOverlay();
+		}
 	} else if (message == UIMessage::SHOW_SETTINGS && screenManager()->topScreen() == this) {
 		UpdateUIState(UISTATE_PAUSEMENU);
 		screenManager()->push(new GameSettingsScreen(gamePath_));
@@ -751,6 +761,10 @@ static void ShowFpsLimitNotice() {
 void EmuScreen::OnVKey(VirtKey virtualKeyCode, bool down) {
 	if (!IsOnTop())
 		return;
+	// Dropped here rather than when processed, as the overlay can close in between (on Escape, which also pauses).
+	// Releases still go through, for what was held when it opened.
+	if (stereoOverlayOpen_ && down && virtualKeyCode != VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY)
+		return;
 	std::lock_guard<std::mutex> lock(queuedVirtKeysLock_);
 	queuedVirtKeys_.push_back(std::make_pair(virtualKeyCode, down));
 }
@@ -823,6 +837,11 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 					break;
 				}
 			}
+		}
+		break;
+	case VIRTKEY_TOGGLE_STEREOSCOPY_OVERLAY:
+		if (down) {
+			ToggleStereoscopyOverlay();
 		}
 		break;
 	case VIRTKEY_OPENCHAT:
@@ -1146,7 +1165,7 @@ void EmuScreen::ProcessVKey(VirtKey virtKey, bool down) {
 }
 
 void EmuScreen::OnVKeyAnalog(VirtKey virtualKeyCode, float value) {
-	if (!IsOnTop())
+	if (!IsOnTop() || (stereoOverlayOpen_ && value != 0.0f))
 		return;
 
 	if (virtualKeyCode != VIRTKEY_SPEED_ANALOG) {
@@ -1197,6 +1216,10 @@ bool EmuScreen::key(const KeyInput &key) {
 		}
 		return true;
 	}
+	if (stereoOverlay_) {
+		stereoOverlay_->Key(key);
+		return true;
+	}
 	bool retval = UIScreen::key(key);
 
 	if (!retval && (key.flags & KeyInputFlags::DOWN) != 0 && UI::IsEscapeKey(key)) {
@@ -1219,6 +1242,12 @@ bool EmuScreen::touch(const TouchInput &touch) {
 		if (touch.flags & TouchInputFlags::DOWN) {
 			gameBoot_->Stop();
 		}
+		return true;
+	}
+
+	if (stereoOverlay_) {
+		// Nothing behind it gets touches, the touch controls included.
+		StereoscopyOverlayTouch(touch);
 		return true;
 	}
 
@@ -1257,6 +1286,92 @@ bool EmuScreen::touch(const TouchInput &touch) {
 		return UIScreen::touch(touch);
 	}
 	return false;
+}
+
+void EmuScreen::axis(const AxisInput &axis) {
+	if (stereoOverlay_) {
+		stereoOverlay_->Axis(axis);
+		return;
+	}
+	UIScreen::axis(axis);
+}
+
+void EmuScreen::ToggleStereoscopyOverlay() {
+	if (stereoOverlay_) {
+		CloseStereoscopyOverlay();
+		return;
+	}
+	stereoOverlay_ = std::make_unique<StereoscopyOverlay>(screenManager()->getDrawContext());
+	stereoOverlayOpen_ = true;
+	// Let go of what the game had held. Not here: this can run from the control mapper's own key handler, under its lock.
+	releaseMapperInput_ = true;
+}
+
+// Changes were applied as they were made. Only now are they saved.
+void EmuScreen::CloseStereoscopyOverlay() {
+	if (!stereoOverlay_) {
+		return;
+	}
+	const bool changed = stereoOverlay_->Changed();
+	stereoOverlay_.reset();
+	stereoOverlayOpen_ = false;
+	if (changed) {
+		g_Config.Save("StereoscopyOverlay");
+	}
+}
+
+// The overlay is laid out for the whole screen. With stereoscopy, each eye shows it squeezed into its part of the
+// frame (which the display stretches back), the same in both, so it's at screen depth whatever the UI depth.
+void EmuScreen::renderStereoscopyOverlay() {
+	using namespace Draw;
+	DrawContext *draw = screenManager()->getDrawContext();
+	UIContext *ctx = screenManager()->getUIContext();
+
+	ctx->BeginFrame();
+	ctx->Begin();
+	FRect eyes[2];
+	if (gameOnOutput_ || !GetStereoscopyEyeViewports(GameLayoutConfig(), (float)g_display.pixel_xres, (float)g_display.pixel_yres, eyes)) {
+		stereoOverlay_->Draw(*ctx, ctx->GetLayoutBounds(ViewLayoutMode::ApplyInsets, UseImmersiveMode()));
+		ctx->Flush();
+		return;
+	}
+
+	for (const FRect &eye : eyes) {
+		draw->SetViewport(Viewport{ eye.x, eye.y, eye.w, eye.h, 0.0f, 1.0f });
+		draw->SetScissorRect((int)eye.x, (int)eye.y, (int)eye.w, (int)eye.h);
+		stereoOverlay_->Draw(*ctx, ctx->GetBounds());
+		ctx->Flush();
+	}
+	draw->SetViewport(Viewport{ 0.0f, 0.0f, (float)g_display.pixel_xres, (float)g_display.pixel_yres, 0.0f, 1.0f });
+	draw->SetScissorRect(0, 0, g_display.pixel_xres, g_display.pixel_yres);
+}
+
+// From screen coordinates to the overlay's, through whichever eye was touched.
+void EmuScreen::StereoscopyOverlayTouch(TouchInput touch) {
+	FRect eyes[2];
+	if (gameOnOutput_ || !GetStereoscopyEyeViewports(GameLayoutConfig(), (float)g_display.pixel_xres, (float)g_display.pixel_yres, eyes)) {
+		stereoOverlay_->Touch(touch);
+		return;
+	}
+	const float px = touch.x * g_display.pixel_in_dps_x;
+	const float py = touch.y * g_display.pixel_in_dps_y;
+	if (touch.flags & TouchInputFlags::DOWN) {
+		stereoOverlayTouchEye_ = -1;
+		for (int eye = 0; eye < 2; eye++) {
+			const FRect &vp = eyes[eye];
+			if (px >= vp.x && px < vp.x + vp.w && py >= vp.y && py < vp.y + vp.h) {
+				stereoOverlayTouchEye_ = eye;
+			}
+		}
+		if (stereoOverlayTouchEye_ < 0) {
+			return;
+		}
+	}
+	const FRect &vp = eyes[std::max(0, stereoOverlayTouchEye_)];
+	const Bounds &bounds = screenManager()->getUIContext()->GetBounds();
+	touch.x = bounds.x + (px - vp.x) / vp.w * bounds.w;
+	touch.y = bounds.y + (py - vp.y) / vp.h * bounds.h;
+	stereoOverlay_->Touch(touch);
 }
 
 // TODO: Shouldn't actually need bounds for this, Anchor can center too.
@@ -1513,6 +1628,13 @@ void EmuScreen::update() {
 		// Otherwise a stick let go inside the chat would stay pushed for the game.
 		g_controlMapper.ReleaseAll();
 		releaseMapperInput_ = false;
+	}
+
+	if (stereoOverlay_) {
+		stereoOverlay_->Update();
+		if (stereoOverlay_->WantsClose()) {
+			CloseStereoscopyOverlay();
+		}
 	}
 
 	// Only once a savestate operation has taken a while, or it'd flash up on every quick save.
@@ -1928,6 +2050,10 @@ ScreenRenderFlags EmuScreen::render(ScreenRenderMode mode) {
 		}
 		cardboardDisableButton_->SetVisibility(displayLayoutConfig.bEnableCardboardVR ? UI::V_VISIBLE : UI::V_GONE);
 		renderUI();
+	}
+
+	if (stereoOverlay_) {
+		renderStereoscopyOverlay();
 	}
 
 	if (chatMenu_ && (chatMenu_->GetVisibility() == UI::V_VISIBLE)) {

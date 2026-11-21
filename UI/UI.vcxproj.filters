@@ -90,6 +90,9 @@
     <ClCompile Include="ChatScreen.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
+    <ClCompile Include="StereoscopyOverlay.cpp">
+      <Filter>Screens</Filter>
+    </ClCompile>
     <ClCompile Include="Store.cpp">
       <Filter>Screens</Filter>
     </ClCompile>
@@ -299,6 +302,9 @@
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="ChatScreen.h">
+      <Filter>Screens</Filter>
+    </ClInclude>
+    <ClInclude Include="StereoscopyOverlay.h">
       <Filter>Screens</Filter>
     </ClInclude>
     <ClInclude Include="Store.h">

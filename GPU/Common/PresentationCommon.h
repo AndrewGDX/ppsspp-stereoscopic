@@ -91,6 +91,7 @@ class Texture;
 struct ShaderInfo;
 struct OverlayLayout;
 class TextureCacheCommon;
+enum class StereoscopyMode : int;
 
 // Stereoscopic 3D on a normal display: both eyes are drawn in one pass, into two-layer framebuffers, and
 // presented side by side or top and bottom. The backend can do it (not software rendering or VR).
@@ -207,6 +208,7 @@ protected:
 	bool CompilePostShader(const ShaderInfo *shaderInfo, Draw::Pipeline **outPipeline) const;
 	bool BuildPostShader(const DisplayLayoutConfig &config, const ShaderInfo *shaderInfo, const ShaderInfo *next, Draw::Pipeline **outPipeline);
 	bool AllocateFramebuffer(int w, int h);
+	void ScaleForStereoComposite(int *w, int *h) const;
 
 	bool BindSource(int binding, bool bindStereo);
 
@@ -236,7 +238,11 @@ protected:
 	std::vector<Draw::Framebuffer *> postShaderFramebuffers_;
 	std::vector<ShaderInfo> postShaderInfo_;
 	std::vector<Draw::Framebuffer *> previousFramebuffers_;
-	
+	// Stereoscopy: the post shaders run on both eyes side by side (or top and bottom), composited here at render
+	// resolution. The layout they were built for, OFF without stereoscopy.
+	Draw::Framebuffer *stereoComposite_ = nullptr;
+	StereoscopyMode stereoPostMode_{};
+
 	int previousIndex_ = 0;
 	PostShaderUniforms previousUniforms_{};
 
@@ -271,5 +277,7 @@ protected:
 	OutputFlags outputFlags_ = OutputFlags::DEFAULT;
 	// Stereoscopy: each eye goes to its viewport, with rc_ relative to it.
 	bool stereoscopyOutput_ = false;
+	// This frame's post shaders run on stereoComposite_.
+	bool stereoPost_ = false;
 	FRect stereoViewports_[2]{};
 };

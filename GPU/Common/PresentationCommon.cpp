@@ -321,6 +321,51 @@ static std::string ReadShaderSrc(const Path &filename) {
 	return src;
 }
 
+// Where each eye goes in the frame. Each eye is laid out in eyeFrame (at the origin) like a mono image is in the
+// whole frame, then drawn with the eye's viewport. The half modes squeeze each eye into half the frame, the full
+// ones keep its aspect ratio, so the two together are twice as wide (or tall) as the frame and get letterboxed.
+static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect *eyeFrame, FRect viewports[2]) {
+	const float halfW = frame.w * 0.5f;
+	const float halfH = frame.h * 0.5f;
+	const bool full = mode == StereoscopyMode::FULL_SBS || mode == StereoscopyMode::FULL_TAB;
+	*eyeFrame = { 0.0f, 0.0f, full ? halfW : frame.w, full ? halfH : frame.h };
+	for (int eye = 0; eye < 2; eye++) {
+		FRect &vp = viewports[eye];
+		switch (mode) {
+		case StereoscopyMode::FULL_SBS:
+			vp = { frame.x + eye * halfW, frame.y + halfH * 0.5f, halfW, halfH };
+			break;
+		case StereoscopyMode::HALF_TAB:
+			vp = { frame.x, frame.y + eye * halfH, frame.w, halfH };
+			break;
+		case StereoscopyMode::FULL_TAB:
+			vp = { frame.x + halfW * 0.5f, frame.y + eye * halfH, halfW, halfH };
+			break;
+		case StereoscopyMode::HALF_SBS:
+		default:
+			vp = { frame.x + eye * halfW, frame.y, halfW, frame.h };
+			break;
+		}
+	}
+}
+
+static bool StereoscopySideBySide(StereoscopyMode mode) {
+	return mode == StereoscopyMode::HALF_SBS || mode == StereoscopyMode::FULL_SBS;
+}
+
+// With stereoscopy, post shaders run on both eyes composited side by side (or top and bottom), so their
+// framebuffers are twice the size of an eye along the layout.
+void PresentationCommon::ScaleForStereoComposite(int *w, int *h) const {
+	if (stereoPostMode_ == StereoscopyMode::OFF) {
+		return;
+	}
+	if (StereoscopySideBySide(stereoPostMode_)) {
+		*w *= 2;
+	} else {
+		*h *= 2;
+	}
+}
+
 // Note: called on resize and settings changes.
 bool PresentationCommon::UpdatePostShader(const DisplayLayoutConfig &config) {
 	std::vector<const ShaderInfo *> shaderInfo;
@@ -333,6 +378,18 @@ bool PresentationCommon::UpdatePostShader(const DisplayLayoutConfig &config) {
 	if (shaderInfo.empty()) {
 		usePostShader_ = false;
 		return false;
+	}
+
+	if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+		stereoPostMode_ = (StereoscopyMode)g_Config.iStereoscopyMode;
+		int w = renderWidth_;
+		int h = renderHeight_;
+		ScaleForStereoComposite(&w, &h);
+		stereoComposite_ = draw_->CreateFramebuffer({ w, h, 1, 1, 0, false, "stereo_composite" });
+		if (!stereoComposite_) {
+			DestroyPostShader();
+			return false;
+		}
 	}
 
 	bool usePreviousFrame = false;
@@ -357,6 +414,16 @@ bool PresentationCommon::UpdatePostShader(const DisplayLayoutConfig &config) {
 		const OutputParams output = GetOutput();
 		int w = usePreviousAtOutputResolution ? output.pixelWidth : renderWidth_;
 		int h = usePreviousAtOutputResolution ? output.pixelHeight : renderHeight_;
+		if (stereoPostMode_ != StereoscopyMode::OFF && usePreviousAtOutputResolution) {
+			// Both eyes' viewports together.
+			FRect eyeFrame, viewports[2];
+			GetStereoscopyLayout(stereoPostMode_, GetScreenFrame(config.bIgnoreScreenInsets, output), &eyeFrame, viewports);
+			w = (int)viewports[0].w;
+			h = (int)viewports[0].h;
+			ScaleForStereoComposite(&w, &h);
+		} else if (!usePreviousAtOutputResolution) {
+			ScaleForStereoComposite(&w, &h);
+		}
 
 		_dbg_assert_(w > 0 && h > 0);
 
@@ -434,6 +501,7 @@ bool PresentationCommon::BuildPostShader(const DisplayLayoutConfig &config, cons
 	if (!shaderInfo->outputResolution || next) {
 		int nextWidth = renderWidth_;
 		int nextHeight = renderHeight_;
+		ScaleForStereoComposite(&nextWidth, &nextHeight);
 
 		// When chaining, we use the previous resolution as a base, rather than the render resolution.
 		if (!postShaderFramebuffers_.empty())
@@ -444,6 +512,7 @@ bool PresentationCommon::BuildPostShader(const DisplayLayoutConfig &config, cons
 			const bool isPortrait = config.InternalRotationIsPortrait();
 			nextWidth = isPortrait ? 272 : 480;
 			nextHeight = isPortrait ? 480 : 272;
+			ScaleForStereoComposite(&nextWidth, &nextHeight);
 		} else if (next && next->SSAAFilterLevel >= 2) {
 			// Increase the resolution this shader outputs for the next to SSAA.
 			nextWidth *= next->SSAAFilterLevel;
@@ -453,9 +522,19 @@ bool PresentationCommon::BuildPostShader(const DisplayLayoutConfig &config, cons
 			const OutputParams output = GetOutput();
 			FRect rc;
 			FRect frame = GetScreenFrame(config.bIgnoreScreenInsets, output);
+			FRect viewports[2];
+			if (stereoPostMode_ != StereoscopyMode::OFF) {
+				GetStereoscopyLayout(stereoPostMode_, frame, &frame, viewports);
+			}
 			CalculateDisplayOutputRect(config, &rc, 480.0f, 272.0f, frame, config.iInternalScreenRotation, output.orientation);
 			nextWidth = (int)rc.w;
 			nextHeight = (int)rc.h;
+			if (stereoPostMode_ != StereoscopyMode::OFF) {
+				// The eye as it's shown (the half modes squeeze it), twice.
+				nextWidth = (int)(rc.w * viewports[0].w / frame.w);
+				nextHeight = (int)(rc.h * viewports[0].h / frame.h);
+				ScaleForStereoComposite(&nextWidth, &nextHeight);
+			}
 		}
 
 		if (!AllocateFramebuffer(nextWidth, nextHeight)) {
@@ -579,7 +658,7 @@ void PresentationCommon::CreateDeviceObjects() {
 	_dbg_assert_(vdata_ == nullptr);
 
 	// TODO: Could probably just switch to DrawUP, it's supported well by all backends now.
-	vdata_ = draw_->CreateBuffer(sizeof(Vertex) * 12, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
+	vdata_ = draw_->CreateBuffer(sizeof(Vertex) * 16, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
 
 	samplerNearest_ = draw_->CreateSamplerState({ TextureFilter::NEAREST, TextureFilter::NEAREST, TextureFilter::NEAREST, 0.0f, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE });
 	samplerLinear_ = draw_->CreateSamplerState({ TextureFilter::LINEAR, TextureFilter::LINEAR, TextureFilter::LINEAR, 0.0f, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE, TextureAddressMode::CLAMP_TO_EDGE });
@@ -657,6 +736,8 @@ void PresentationCommon::DestroyPostShader() {
 	DoReleaseVector(postShaderPipelines_);
 	DoReleaseVector(postShaderFramebuffers_);
 	DoReleaseVector(previousFramebuffers_);
+	DoRelease(stereoComposite_);
+	stereoPostMode_ = StereoscopyMode::OFF;
 	postShaderInfo_.clear();
 	postShaderFBOUsage_.clear();
 }
@@ -724,7 +805,11 @@ bool PresentationCommon::UseVRStereoSource() const {
 
 // Return value is if stereo binding succeeded.
 bool PresentationCommon::BindSource(int binding, bool bindStereo) {
-	if (srcTexture_) {
+	if (stereoPost_) {
+		// What the post shaders see as the source.
+		draw_->BindFramebufferAsTexture(stereoComposite_, binding, Draw::Aspect::COLOR_BIT, 0);
+		return false;
+	} else if (srcTexture_) {
 		draw_->BindTexture(binding, srcTexture_);
 		return false;
 	} else if (srcFramebuffer_) {
@@ -751,34 +836,6 @@ void PresentationCommon::UpdateUniforms(bool hasVideo) {
 	hasVideo_ = hasVideo;
 }
 
-// Where each eye goes in the frame. Each eye is laid out in eyeFrame (at the origin) like a mono image is in the
-// whole frame, then drawn with the eye's viewport. The half modes squeeze each eye into half the frame, the full
-// ones keep its aspect ratio, so the two together are twice as wide (or tall) as the frame and get letterboxed.
-static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect *eyeFrame, FRect viewports[2]) {
-	const float halfW = frame.w * 0.5f;
-	const float halfH = frame.h * 0.5f;
-	const bool full = mode == StereoscopyMode::FULL_SBS || mode == StereoscopyMode::FULL_TAB;
-	*eyeFrame = { 0.0f, 0.0f, full ? halfW : frame.w, full ? halfH : frame.h };
-	for (int eye = 0; eye < 2; eye++) {
-		FRect &vp = viewports[eye];
-		switch (mode) {
-		case StereoscopyMode::FULL_SBS:
-			vp = { frame.x + eye * halfW, frame.y + halfH * 0.5f, halfW, halfH };
-			break;
-		case StereoscopyMode::HALF_TAB:
-			vp = { frame.x, frame.y + eye * halfH, frame.w, halfH };
-			break;
-		case StereoscopyMode::FULL_TAB:
-			vp = { frame.x + halfW * 0.5f, frame.y + eye * halfH, halfW, halfH };
-			break;
-		case StereoscopyMode::HALF_SBS:
-		default:
-			vp = { frame.x + eye * halfW, frame.y, halfW, frame.h };
-			break;
-		}
-	}
-}
-
 void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, OutputFlags flags, int uvRotation, float u0, float v0, float u1, float v1) {
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 
@@ -794,8 +851,11 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	const bool vrStereo = UseVRStereoSource();
 	// A mono source (like a frame from RAM) is shown to both eyes, so the layout doesn't jump.
 	stereoscopyOutput_ = gstate_c.Use(GPU_USE_STEREOSCOPY) && !(flags & OutputFlags::NATIVE_SIZE);
+	const bool postShaderAllowed = usePostShader_ && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
+	// Post shaders run on both eyes composited, once they're built for this layout (see UpdatePostShader).
+	stereoPost_ = stereoscopyOutput_ && postShaderAllowed && stereoComposite_ && stereoPostMode_ == (StereoscopyMode)g_Config.iStereoscopyMode;
 
-	const bool usePostShader = usePostShader_ && !stereoscopyOutput_ && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
+	const bool usePostShader = postShaderAllowed && (!stereoscopyOutput_ || stereoPost_);
 	const bool isFinalAtOutputResolution = usePostShader && postShaderFramebuffers_.size() < postShaderPipelines_.size();
 	int lastWidth = srcWidth_;
 	int lastHeight = srcHeight_;
@@ -827,6 +887,7 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 
 	if (!srcTexture_ && !srcFramebuffer_) {
 		// Presenting blank, no need to run post shaders. But we did compute the output rect.
+		stereoPost_ = false;
 		return;
 	}
 
@@ -835,7 +896,7 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 
 	float finalU0 = u0, finalU1 = u1, finalV0 = v0, finalV1 = v1;
 
-	if (usePostShader && !(isFinalAtOutputResolution && postShaderPipelines_.size() == 1)) {
+	if (usePostShader && (stereoPost_ || !(isFinalAtOutputResolution && postShaderPipelines_.size() == 1))) {
 		// The final blit will thus use the full texture.
 		finalU0 = 0.0f;
 		finalV0 = 0.0f;
@@ -843,11 +904,12 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 		finalV1 = 1.0f;
 	}
 
-	// Our vertex buffer is split into three parts, with four vertices each:
+	// Our vertex buffer is split into four parts, with four vertices each:
 	// 0-3: The final blit vertices (needs to handle cropping the input ONLY if post-processing is not enabled)
 	// 4-7: Post-processing, other passes
 	// 8-11: Post-processing, first pass (needs to handle cropping the input image, if wrong dimensions)
-	Vertex verts[12] = {
+	// 12-15: With stereoscopy and post-processing, the final blit of the right eye (0-3 do the left)
+	Vertex verts[16] = {
 		{ rc_.x, rc_.y, 0, finalU0, finalV0, 0xFFFFFFFF }, // TL
 		{ rc_.x + rc_.w, rc_.y, 0, finalU1, finalV0, 0xFFFFFFFF }, // TR
 		{ rc_.x, rc_.y + rc_.h, 0, finalU0, finalV1, 0xFFFFFFFF }, // BL
@@ -927,6 +989,18 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 		}
 	}
 
+	if (stereoPost_) {
+		// Each eye shows its half of the composite. The UVs above are 0 or 1, whatever the rotation.
+		const bool sideBySide = StereoscopySideBySide(stereoPostMode_);
+		for (int i = 0; i < 4; i++) {
+			verts[i + 12] = verts[i];
+			float &left = sideBySide ? verts[i].u : verts[i].v;
+			float &right = sideBySide ? verts[i + 12].u : verts[i + 12].v;
+			left *= 0.5f;
+			right = 0.5f + right * 0.5f;
+		}
+	}
+
 	// Grab the previous framebuffer early so we can change previousIndex_ when we want.
 	Draw::Framebuffer *previousFramebuffer = previousFramebuffers_.empty() ? nullptr : previousFramebuffers_[previousIndex_];
 
@@ -983,6 +1057,36 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 
 		draw_->UpdateBuffer(vdata_, (const uint8_t *)verts, 0, sizeof(verts), Draw::UPDATE_DISCARD);
 
+		if (stereoPost_) {
+			// Put the eyes side by side (or top and bottom), cropped, for the post shaders to run on.
+			int w, h;
+			draw_->GetFramebufferDimensions(stereoComposite_, &w, &h);
+			draw_->BindFramebufferAsRenderTarget(stereoComposite_, { Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE }, "StereoComposite");
+			draw_->BindPipeline(texColor_);
+			Draw::VsTexColUB ub{};
+			memcpy(ub.WorldViewProj, Lin::Matrix4x4::identity().m, sizeof(ub.WorldViewProj));
+			draw_->UpdateDynamicUniformBuffer(&ub, sizeof(ub));
+			Draw::SamplerState *sampler = useNearest || postShaderInfo_[0].isUpscalingFilter ? samplerNearest_ : samplerLinear_;
+			draw_->BindSamplerStates(0, 1, &sampler);
+			draw_->BindVertexBuffer(vdata_, (int)sizeof(Vertex) * 8);
+			draw_->SetScissorRect(0, 0, w, h);
+			const bool sideBySide = StereoscopySideBySide(stereoPostMode_);
+			for (int eye = 0; eye < 2; eye++) {
+				const int layer = g_Config.bStereoscopySwapEyes ? 1 - eye : eye;
+				if (srcFramebuffer_) {
+					draw_->BindFramebufferAsTexture(srcFramebuffer_, 0, Draw::Aspect::COLOR_BIT, srcFramebuffer_->Layers() > 1 ? layer : 0);
+				} else {
+					draw_->BindTexture(0, srcTexture_);
+				}
+				Draw::Viewport viewport{ sideBySide ? eye * w * 0.5f : 0.0f, sideBySide ? 0.0f : eye * h * 0.5f, sideBySide ? w * 0.5f : (float)w, sideBySide ? (float)h : h * 0.5f, 0.0f, 1.0f };
+				draw_->SetViewport(viewport);
+				draw_->Draw(4, 0);
+			}
+			postShaderOutput_ = stereoComposite_;
+			lastWidth = w;
+			lastHeight = h;
+		}
+
 		for (size_t i = 0; i < postShaderFramebuffers_.size(); ++i) {
 			Draw::Pipeline *postShaderPipeline = postShaderPipelines_[i];
 			const ShaderInfo *shaderInfo = &postShaderInfo_[i];
@@ -998,8 +1102,8 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 
 			draw_->BindFramebufferAsRenderTarget(postShaderFramebuffer, {Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE}, "PostShader");
 
-			// Pick vertices 8-11 for the first pass.
-			int vertOffset = i == 0 ? (int)sizeof(Vertex) * 8 : (int)sizeof(Vertex) * 4;
+			// Pick vertices 8-11 for the first pass, unless the composite did the cropping.
+			int vertOffset = i == 0 && !stereoPost_ ? (int)sizeof(Vertex) * 8 : (int)sizeof(Vertex) * 4;
 			performShaderPass(shaderInfo, postShaderFramebuffer, postShaderPipeline, vertOffset);
 		}
 
@@ -1189,10 +1293,13 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	bool useNearest = outputFlags_ & OutputFlags::NEAREST;
 	const bool vrStereo = UseVRStereoSource();
 
-	const bool usePostShader = usePostShader_ && !stereoscopyOutput_ && !vrStereo && !(outputFlags_ & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
+	const bool usePostShader = usePostShader_ && (!stereoscopyOutput_ || stereoPost_) && !vrStereo && !(outputFlags_ & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
 	const bool isFinalAtOutputResolution = usePostShader && postShaderFramebuffers_.size() < postShaderPipelines_.size();
 	int lastWidth = srcWidth_;
 	int lastHeight = srcHeight_;
+	if (stereoPost_ && postShaderOutput_) {
+		draw_->GetFramebufferDimensions(postShaderOutput_, &lastWidth, &lastHeight);
+	}
 
 	const OutputParams output = GetOutput();
 	draw_->SetScissorRect(0, 0, output.pixelWidth, output.pixelHeight);
@@ -1265,7 +1372,10 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	if (stereoscopyOutput_) {
 		for (int eye = 0; eye < 2; eye++) {
 			const int layer = g_Config.bStereoscopySwapEyes ? 1 - eye : eye;
-			if (srcFramebuffer_) {
+			if (stereoPost_) {
+				// The eye's half of what the post shaders made, swapped already.
+				draw_->BindVertexBuffer(vdata_, eye == 0 ? 0 : (int)sizeof(Vertex) * 12);
+			} else if (srcFramebuffer_) {
 				draw_->BindFramebufferAsTexture(srcFramebuffer_, 0, Draw::Aspect::COLOR_BIT, srcFramebuffer_->Layers() > 1 ? layer : 0);
 			}
 			const FRect &vp = stereoViewports_[eye];

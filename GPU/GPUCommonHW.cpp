@@ -419,6 +419,10 @@ void GPUCommonHW::CheckConfigChanged(const DisplayLayoutConfig &config) {
 			// Stereoscopy was turned on or off.
 			framebufferManager_->NotifyLayersChanged();
 		}
+		if (framebufferManager_->GetFramebufferLayers() != layers || gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+			// The auto render resolution depends on the stereoscopy layout.
+			renderResized_ = true;
+		}
 		BuildReportingInfo();
 		configChanged_ = false;
 	}

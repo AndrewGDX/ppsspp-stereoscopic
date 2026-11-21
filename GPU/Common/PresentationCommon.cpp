@@ -1427,10 +1427,20 @@ void PresentationCommon::CalculateRenderResolution(const DisplayLayoutConfig &co
 	int zoom = g_Config.iInternalResolution;
 	if (zoom == 0 || firstSSAAFilterLevel >= 2) {
 		// auto mode, use the longest dimension
+		int pixelWidth = PSP_CoreParameter().pixelWidth;
+		int pixelHeight = PSP_CoreParameter().pixelHeight;
+		if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+			// The frame each eye is laid out in. The full modes halve it, the half ones squeeze it afterwards,
+			// which keeps the full resolution along the other axis.
+			FRect eyeFrame, viewports[2];
+			GetStereoscopyLayout((StereoscopyMode)g_Config.iStereoscopyMode, { 0.0f, 0.0f, (float)pixelWidth, (float)pixelHeight }, &eyeFrame, viewports);
+			pixelWidth = (int)eyeFrame.w;
+			pixelHeight = (int)eyeFrame.h;
+		}
 		if (!config.InternalRotationIsPortrait()) {
-			zoom = (PSP_CoreParameter().pixelWidth + 479) / 480;
+			zoom = (pixelWidth + 479) / 480;
 		} else {
-			zoom = (PSP_CoreParameter().pixelHeight + 479) / 480;
+			zoom = (pixelHeight + 479) / 480;
 		}
 		if (firstSSAAFilterLevel >= 2)
 			zoom *= firstSSAAFilterLevel;

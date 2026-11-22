@@ -72,8 +72,10 @@ it costs no shader variants:
   white over them with a depth test at the sun's depth, copies the result out and shrinks it to a pixel
   (the flare's brightness, and a glare over the whole frame), and puts the saved pixels back. Shifted like
   UI, the squares showed beside the restored pixels, which aren't shifted, and the eyes measured the wrong
-  pixels. So a through mode copy of at most 64x64 texels out of a framebuffer at least 480x272 records the
-  area (`stereoProbeAreas`, for the host frame). A 2D draw exactly over a recorded area (within a pixel)
+  pixels. So a through mode copy of at most 64x64 texels out of a framebuffer at least 480x272, pixel for
+  pixel, records the area (`stereoProbeAreas`, for the host frame). Midnight Club keeps its bloom as a
+  64x38 image in the corner of a full size framebuffer and stretches it over the screen: shifting where
+  that samples moved the bloom by the parallax times the stretch. A 2D draw exactly over a recorded area (within a pixel)
   is a probe, at the far distance (UI depth 1), and a copy from inside one samples it shifted by the same
   amount without moving (`u_stereoUI.z`: the texture coordinates move by half the clip space shift, as the
   source's width in texels is the width the clip space spans twice). Each eye then probes, measures and

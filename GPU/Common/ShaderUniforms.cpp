@@ -324,6 +324,12 @@ static StereoDrawClass ClassifyStereoProbe(bool through) {
 	if (source == target || uv.x2 - uv.x1 > MAX_SIZE || uv.y2 - uv.y1 > MAX_SIZE || uv.x2 <= uv.x1 || uv.y2 <= uv.y1) {
 		return StereoDrawClass::WORLD;
 	}
+	// Copied pixel for pixel. Midnight Club keeps its bloom as a 64x38 image in the corner of a full size
+	// framebuffer and stretches it over the screen, which isn't a probe.
+	const StereoBounds2D &pos = gstate_c.stereoBounds2D;
+	if (fabsf((pos.x2 - pos.x1) - (uv.x2 - uv.x1)) > 1.0f || fabsf((pos.y2 - pos.y1) - (uv.y2 - uv.y1)) > 1.0f) {
+		return StereoDrawClass::WORLD;
+	}
 	for (int i = 0; i < gstate_c.numStereoProbeAreas; i++) {
 		const StereoProbeArea &area = gstate_c.stereoProbeAreas[i];
 		if (area.fbAddress == source && InsideBounds(uv, area.bounds)) {

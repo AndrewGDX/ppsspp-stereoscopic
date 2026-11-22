@@ -154,10 +154,27 @@ resolution cuts the GPU time the most.
 
 ## Known issues
 
-- **AMD GPUs in Intel Macs lose depth writes to layered targets.** On a Radeon Pro Vega 20 (macOS 15), 9 of
-  the 43 frame dumps differ from mono with separation 0: a scattering of pixels (a different set each run)
-  keeps its old depth after a clear-mode draw, and later depth tests fail (FlatOut loses the car). Metal
-  and Vulkan through MoltenVK fail the same way, as did the developer option this replaced, while the
-  Intel UHD 630 in the same Mac matches mono in all 43. Clearing each slice in a pass of its own, keeping
-  depth loaded and stored, a depth format without stencil and turning off lossless compression didn't help.
-  Games tested in play rendered correctly.
+- **AMD GPUs in Intel Macs corrupt single-sampled layered depth.** On a Radeon Pro Vega 20
+  (macOS 15), Metal and Vulkan through MoltenVK leave holes in draws that use depth, even with
+  separation 0. In 9 of 43 frame dumps, a scattering of pixels (a different set each run) keeps its
+  old depth after a clear-mode draw, so later depth tests fail (FlatOut loses the car). The earlier
+  developer option showed the same problem. The Intel UHD 630 in the same Mac matches mono in all
+  43 dumps.
+
+  In play, Midnight Club: L.A. Remix at native (1x) rendering resolution stretches these holes
+  through its low-resolution effects into large blocks. The same frame renders correctly in mono,
+  on the Intel UHD 630, or with 2x MSAA. Clearing each slice in a separate pass, keeping depth loaded
+  and stored, using a depth format without stencil, disabling lossless compression, writing fragment
+  depth explicitly, and padding the framebuffer height did not fix the corruption.
+
+  A tested workaround forced at least 2x MSAA for Midnight Club in stereo at 1x resolution on AMD
+  Macs. A driver bug flag (`BROKEN_SINGLE_SAMPLE_LAYERED_DEPTH`) and per-game `StereoMSAA` compat
+  flag selected it without changing the saved MSAA setting. The effective sample count was checked
+  each frame, and changing it recreated the framebuffers. Small effect targets stayed on the usual
+  single-sampled path (`ShouldMultisample`). This avoided the visible corruption, at the cost of GPU
+  time, memory, and antialiasing the scene. It was limited to that game because forcing MSAA for all
+  stereo games introduced an effects glitch in Final Fantasy Type-0 on Metal.
+
+  The automatic workaround and its flags are not included. The AMD Mac issue remains open;
+  selecting 2x MSAA manually avoided it in the tested Midnight Club scene, but can change effects
+  in other games.

@@ -1369,6 +1369,27 @@ void MetalRenderManager::ReplayCopy(const MetalCommandChunk &chunk, const MetalR
 }
 
 static char g_arrayViewKey;
+static char g_sliceViewKeys[2];
+
+void MetalRenderManager::DeferRelease(id object) {
+	if (!object) {
+		return;
+	}
+	frames_[curFrame_].deleteList.push_back(object);
+	// Views retain their parent. Detach cached views, keeping them alive until the frame completes.
+	id arrayView = objc_getAssociatedObject(object, &g_arrayViewKey);
+	if (arrayView) {
+		DeferRelease(arrayView);
+		objc_setAssociatedObject(object, &g_arrayViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+	}
+	for (auto &key : g_sliceViewKeys) {
+		id sliceView = objc_getAssociatedObject(object, &key);
+		if (sliceView) {
+			DeferRelease(sliceView);
+			objc_setAssociatedObject(object, &key, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		}
+	}
+}
 
 id<MTLTexture> MetalRenderManager::ArrayView(id<MTLTexture> texture) {
 	if (!texture || texture.textureType == MTLTextureType2DArray || texture.textureType == MTLTextureType2DMultisampleArray) {
@@ -1388,8 +1409,6 @@ id<MTLTexture> MetalRenderManager::ArrayView(id<MTLTexture> texture) {
 	}
 	return view;
 }
-
-static char g_sliceViewKeys[2];
 
 id<MTLTexture> MetalRenderManager::SliceView(id<MTLTexture> texture, int slice) {
 	_dbg_assert_(slice >= 0 && slice < (int)ARRAY_SIZE(g_sliceViewKeys));

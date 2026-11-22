@@ -390,11 +390,7 @@ public:
 	// Command buffers don't retain what they use (that costs a retain and release per binding), so
 	// anything that may still be in use by the GPU has to be released through this. Keeps the object
 	// alive until the GPU is done with the current frame.
-	void DeferRelease(id object) {
-		if (object) {
-			frames_[curFrame_].deleteList.push_back(object);
-		}
-	}
+	void DeferRelease(id object);
 
 	// Swapchains. The backbuffer is the first, and lives as long as the render manager. Others are created
 	// and destroyed between frames. Destroying one waits for the GPU.

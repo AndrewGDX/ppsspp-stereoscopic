@@ -57,8 +57,11 @@ it costs no shader variants:
 - **Crosshair**: with Crosshair Depth not 0, a UI draw at most 64 pixels across whose screen bounding box
   lies within 64 pixels of the PSP screen's center horizontally and 48 vertically, in a render target at
   least 480x272, while a World draw happened in this host frame or the last (a 30 FPS game can draw a frame
-  across two). `DecodeVerts` finds the box (`stereoBounds2D`), for orthographic draws through the
-  world-view-projection and viewport. It's at the UI depth plus the Crosshair Depth (the sum clamped to
+  across two), and while the center isn't busy: fewer than 4 other 2D draws (not full screen) reaching
+  within 120x80 pixels of it, in this host frame so far and in the last one that drew something
+  (`stereoNearCenter2D`), so a menu drawn after its icons counts too. Peace Walker's HUD has none there,
+  its inventory about 30, with icons and text in the crosshair's area. `DecodeVerts` finds the box
+  (`stereoBounds2D`), for orthographic draws through the world-view-projection and viewport. It's at the UI depth plus the Crosshair Depth (the sum clamped to
   ±100), so 0 leaves it with the UI. Peace Walker's aiming reticle is four dots, each an orthographic quad
   of a few pixels; its 64x64 blur buffers are what the render target size rule keeps out.
 - **Probe** and **probe copy** (`ClassifyStereoProbe`): lens flares measure how much of the sun is hidden

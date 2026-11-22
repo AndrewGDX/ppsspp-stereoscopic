@@ -699,6 +699,10 @@ public:
 	StereoBounds2D stereoUVBounds2D;
 	// Host frames since the last WORLD draw. Crosshairs are only looked for over a 3D scene.
 	int stereoFramesSinceWorld;
+	// 2D draws near the center of the screen other than crosshair parts, in this host frame and the last one
+	// that drew something. See IsCrosshair2D.
+	int stereoNearCenter2D;
+	int stereoNearCenter2DLast;
 	// Areas copied out in this host frame.
 	StereoProbeArea stereoProbeAreas[8];
 	int numStereoProbeAreas;

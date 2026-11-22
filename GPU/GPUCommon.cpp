@@ -69,6 +69,11 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 void GPUCommon::BeginHostFrame(const DisplayLayoutConfig &config) {
 	ReapplyGfxState();
 
+	// A host frame that drew nothing (half of them at 30 FPS) keeps the last count.
+	if (gstate_c.stereoFramesSinceWorld == 0 || gstate_c.stereoNearCenter2D > 0) {
+		gstate_c.stereoNearCenter2DLast = gstate_c.stereoNearCenter2D;
+	}
+	gstate_c.stereoNearCenter2D = 0;
 	// Saturates, so it doesn't wrap around in a long 2D stretch.
 	if (gstate_c.stereoFramesSinceWorld < 2) {
 		gstate_c.stereoFramesSinceWorld++;

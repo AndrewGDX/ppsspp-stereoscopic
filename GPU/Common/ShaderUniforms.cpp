@@ -337,12 +337,18 @@ static StereoDrawClass ClassifyStereoProbe(bool through) {
 }
 
 // A small 2D draw near the center of the screen, like a crosshair (Peace Walker draws its dots in ortho, each a
-// few pixels).
+// few pixels), unless the center is busy with other 2D draws, like a menu (Peace Walker's inventory has its
+// icons there, among about 30 other draws). Counts those other draws.
 static bool IsCrosshair2D() {
 	// The largest crosshair part, and how far from the center its edges can be, in PSP pixels.
 	const float MAX_SIZE = 64.0f;
 	const float MAX_OFFSET_X = 64.0f;
 	const float MAX_OFFSET_Y = 48.0f;
+	// How far from the center other 2D draws make it busy, and how many of them do. Peace Walker's HUD has none
+	// there besides two full screen overlays, which don't count.
+	const float BUSY_OFFSET_X = 120.0f;
+	const float BUSY_OFFSET_Y = 80.0f;
+	const int MAX_NEARBY = 4;
 	// The center of the PSP's screen (the buffer is often 512 wide).
 	const float CENTER_X = 240.0f;
 	const float CENTER_Y = 136.0f;
@@ -356,10 +362,16 @@ static bool IsCrosshair2D() {
 		return false;
 	}
 	const StereoBounds2D &b = gstate_c.stereoBounds2D;
-	if (b.x2 - b.x1 > MAX_SIZE || b.y2 - b.y1 > MAX_SIZE) {
-		return false;
+	const bool small = b.x2 - b.x1 <= MAX_SIZE && b.y2 - b.y1 <= MAX_SIZE;
+	if (small && b.x1 >= CENTER_X - MAX_OFFSET_X && b.x2 <= CENTER_X + MAX_OFFSET_X && b.y1 >= CENTER_Y - MAX_OFFSET_Y && b.y2 <= CENTER_Y + MAX_OFFSET_Y) {
+		// This frame so far, or the last one, in case the menu is drawn after.
+		return gstate_c.stereoNearCenter2D < MAX_NEARBY && gstate_c.stereoNearCenter2DLast < MAX_NEARBY;
 	}
-	return b.x1 >= CENTER_X - MAX_OFFSET_X && b.x2 <= CENTER_X + MAX_OFFSET_X && b.y1 >= CENTER_Y - MAX_OFFSET_Y && b.y2 <= CENTER_Y + MAX_OFFSET_Y;
+	const bool fullscreen = b.x2 - b.x1 >= 0.9f * (float)gstate_c.curRTWidth && b.y2 - b.y1 >= 0.9f * (float)gstate_c.curRTHeight;
+	if (!fullscreen && b.x2 > CENTER_X - BUSY_OFFSET_X && b.x1 < CENTER_X + BUSY_OFFSET_X && b.y2 > CENTER_Y - BUSY_OFFSET_Y && b.y1 < CENTER_Y + BUSY_OFFSET_Y) {
+		gstate_c.stereoNearCenter2D++;
+	}
+	return false;
 }
 
 static StereoDrawClass ClassifyStereoDraw() {

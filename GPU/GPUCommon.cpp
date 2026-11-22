@@ -69,6 +69,11 @@ GPUCommon::GPUCommon(GraphicsContext *gfxCtx, Draw::DrawContext *draw) :
 void GPUCommon::BeginHostFrame(const DisplayLayoutConfig &config) {
 	ReapplyGfxState();
 
+	// Saturates, so it doesn't wrap around in a long 2D stretch.
+	if (gstate_c.stereoFramesSinceWorld < 2) {
+		gstate_c.stereoFramesSinceWorld++;
+	}
+
 	// TODO: Assume config may have changed - maybe move to resize.
 	gstate_c.Dirty(DIRTY_ALL);
 

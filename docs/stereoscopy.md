@@ -54,6 +54,13 @@ it costs no shader variants:
 - **Flat** (not shifted): clears, 2D draws of framebuffers (post effects, compositing, already stereo), and
   with detection off, all through mode and orthographic draws.
 - **UI**: through mode draws and orthographic projections (constant w).
+- **Crosshair**: with Crosshair Depth not 0, a UI draw at most 64 pixels across whose screen bounding box
+  lies within 64 pixels of the PSP screen's center horizontally and 48 vertically, in a render target at
+  least 480x272, while a World draw happened in this host frame or the last (a 30 FPS game can draw a frame
+  across two). `DecodeVerts` finds the box (`stereoCentered2D`), for orthographic draws through the
+  world-view-projection and viewport. It's at the UI depth plus the Crosshair Depth (the sum clamped to
+  ±100), so 0 leaves it with the UI. Peace Walker's aiming reticle is four dots, each an orthographic quad
+  of a few pixels; its 64x64 blur buffers are what the render target size rule keeps out.
 - **Second layer**: a through mode draw covering at least 90% of the render target, like a menu background
   (`stereoFullscreen2D`, from the software transform). In Advanced mode, also 3D draws without depth
   test and depth write. These Advanced-only draw detections follow Second Layer Parallax.

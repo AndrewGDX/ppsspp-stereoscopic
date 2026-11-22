@@ -1009,6 +1009,8 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "UI Detection Mode").Choices(stereoscopyUIDetectionNames),
 	ConfigSetting("StereoscopyUIDepth", SETTING(g_Config, iStereoscopyUIDepth), 0, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "UI Depth").Range(-100, 100),
+	ConfigSetting("StereoscopyCrosshairDepth", SETTING(g_Config, iStereoscopyCrosshairDepth), 0, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Crosshair Depth").Range(-100, 100),
 	ConfigSetting("StereoscopySecondLayerParallax", SETTING(g_Config, iStereoscopySecondLayerParallax), 15, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "Second Layer Parallax").Range(-100, 100),
 	ConfigSetting("StereoscopyUIDetectionThreshold", SETTING(g_Config, iStereoscopyUIDetectionThreshold), 1, CfgFlag::PER_GAME)

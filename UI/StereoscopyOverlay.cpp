@@ -72,7 +72,7 @@ static const float ROW_INSET = 10.0f;
 static const float CORNER_RADIUS = 12.0f;
 
 // The strip puts the settings in two columns of this many rows.
-static const int STRIP_ROWS = 5;
+static const int STRIP_ROWS = 6;
 
 static const double REPEAT_DELAY = 0.35;
 static const double REPEAT_INTERVAL = 0.06;
@@ -98,6 +98,7 @@ StereoscopyOverlay::StereoscopyOverlay(Draw::DrawContext *draw) : draw_(draw) {
 	add(&g_Config.fStereoscopyConvergence, RowType::FLOAT, 0.01f, true, &StereoscopyOn);
 	add(&g_Config.iStereoscopyUIDetectionMode, RowType::CHOICE, 0.0f, false, &StereoscopyOn);
 	add(&g_Config.iStereoscopyUIDepth, RowType::INT, 1.0f, false, &StereoscopyUIDetectionOn);
+	add(&g_Config.iStereoscopyCrosshairDepth, RowType::INT, 1.0f, false, &StereoscopyUIDetectionOn);
 	add(&g_Config.iStereoscopySecondLayerParallax, RowType::INT, 1.0f, false, &StereoscopyUIDetectionOn);
 	add(&g_Config.iStereoscopyUIDetectionThreshold, RowType::INT, 1.0f, false, &StereoscopyUIThresholdOn);
 	// Last, as it's the overlay's own (and not per game).

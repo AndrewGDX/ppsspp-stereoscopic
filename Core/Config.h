@@ -435,6 +435,7 @@ public:
 	float fStereoscopyConvergence;
 	int iStereoscopyUIDetectionMode;  // StereoscopyUIDetection
 	int iStereoscopyUIDepth;
+	int iStereoscopyCrosshairDepth;  // Added to the UI depth. 0 turns crosshair detection off.
 	int iStereoscopySecondLayerParallax;
 	int iStereoscopyUIDetectionThreshold;
 	int iStereoscopyOverlayPosition;  // StereoscopyOverlayPosition. Not per game.

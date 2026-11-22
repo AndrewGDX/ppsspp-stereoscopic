@@ -298,6 +298,10 @@ static StereoDrawClass ClassifyStereoDraw() {
 		if (detection == StereoscopyUIDetection::OFF || (gstate.isTextureMapEnabled() && gstate_c.textureIsFramebuffer)) {
 			return StereoDrawClass::FLAT;
 		}
+		// Over a 3D scene drawn in this host frame or the last (a game at 30 FPS can draw a frame across two).
+		if (gstate_c.stereoCentered2D && gstate_c.stereoFramesSinceWorld <= 1) {
+			return StereoDrawClass::CROSSHAIR;
+		}
 		return through && gstate_c.stereoFullscreen2D ? StereoDrawClass::SECOND_LAYER : StereoDrawClass::UI;
 	}
 	if (detection == StereoscopyUIDetection::ADVANCED && !gstate.isDepthTestEnabled() && !gstate.isDepthWriteEnabled()) {
@@ -311,6 +315,9 @@ void UpdateStereoDrawClass() {
 		return;
 	}
 	const StereoDrawClass drawClass = ClassifyStereoDraw();
+	if (drawClass == StereoDrawClass::WORLD) {
+		gstate_c.stereoFramesSinceWorld = 0;
+	}
 	if (drawClass != gstate_c.stereoDrawClass) {
 		gstate_c.stereoDrawClass = drawClass;
 		gstate_c.Dirty(DIRTY_STEREO);
@@ -345,13 +352,17 @@ static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 	ub->stereoEyeScale[1] = right;
 	const float convergence = std::clamp(g_Config.fStereoscopyConvergence, 0.0f, 200.0f);
 	ub->stereoConvergence = convergence / 10.0f + (3000.0f - 200.0f / 10.0f) * std::pow(convergence / 200.0f, 4.0f);
-	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::SECOND_LAYER) ? 1.0f : 0.0f;
+	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::CROSSHAIR || drawClass == StereoDrawClass::SECOND_LAYER) ? 1.0f : 0.0f;
 	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
 	// Threshold-detected world vertices use UI depth; other Advanced-only detections use the second layer.
 	const bool advancedWorld = drawClass == StereoDrawClass::WORLD && detection == StereoscopyUIDetection::ADVANCED;
 	const bool secondLayer = drawClass == StereoDrawClass::SECOND_LAYER;
 	// At most the separation either way, like the far distance.
-	const int depth = secondLayer ? g_Config.iStereoscopySecondLayerParallax : g_Config.iStereoscopyUIDepth;
+	int depth = secondLayer ? g_Config.iStereoscopySecondLayerParallax : g_Config.iStereoscopyUIDepth;
+	if (drawClass == StereoDrawClass::CROSSHAIR) {
+		// Relative to the UI.
+		depth += g_Config.iStereoscopyCrosshairDepth;
+	}
 	ub->stereoUIDepth = (float)std::clamp(depth, -100, 100) * 0.01f;
 	// Advanced detection puts world vertices nearer than the configured clip-w threshold at UI depth.
 	ub->stereoUIThresholdW = advancedWorld ? (float)g_Config.iStereoscopyUIDetectionThreshold : -std::numeric_limits<float>::max();

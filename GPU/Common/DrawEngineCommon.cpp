@@ -1512,6 +1512,57 @@ bool DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimiti
 	return true;
 }
 
+// For stereoscopy's crosshair depth: a through mode or orthographic draw that's small and near the center of
+// the screen, like a crosshair (Metal Gear Solid: Peace Walker draws its dots in ortho, each a few pixels).
+static bool IsCentered2DDraw(const VertexDecoder *dec, const u8 *decoded, int count) {
+	// The largest crosshair part, and how far from the center its edges can be, in PSP pixels.
+	const float MAX_SIZE = 64.0f;
+	const float MAX_OFFSET_X = 64.0f;
+	const float MAX_OFFSET_Y = 48.0f;
+
+	// Small render targets are effect buffers (Peace Walker blurs in 64x64 ones), and anything is small there.
+	if (gstate_c.curRTWidth < 480 || gstate_c.curRTHeight < 272) {
+		return false;
+	}
+	if (count == 0 || gstate.isModeClear() || (dec->VertexType() & GE_VTYPE_WEIGHT_MASK)) {
+		return false;
+	}
+	const bool through = gstate.isModeThrough();
+	// Like ClassifyStereoDraw: a constant w.
+	if (!through && !(gstate.projMatrix[3] == 0.0f && gstate.projMatrix[7] == 0.0f && gstate.projMatrix[11] == 0.0f)) {
+		return false;
+	}
+
+	const DecVtxFormat &fmt = dec->GetDecVtxFmt();
+	float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+	for (int i = 0; i < count; i++) {
+		// Always DEC_FLOAT_3.
+		const float *pos = (const float *)(decoded + i * fmt.stride + fmt.posoff);
+		float x = pos[0];
+		float y = pos[1];
+		if (!through) {
+			float projpos[4];
+			Vec3ByMatrix44(projpos, pos, gstate_c.worldviewproj);
+			if (fabsf(projpos[3]) < 1e-6f) {
+				return false;
+			}
+			x = projpos[0] / projpos[3] * gstate.getViewportXScale() + gstate.getViewportXCenter() - gstate.getOffsetX();
+			y = projpos[1] / projpos[3] * gstate.getViewportYScale() + gstate.getViewportYCenter() - gstate.getOffsetY();
+		}
+		minX = std::min(minX, x);
+		maxX = std::max(maxX, x);
+		minY = std::min(minY, y);
+		maxY = std::max(maxY, y);
+	}
+	if (maxX - minX > MAX_SIZE || maxY - minY > MAX_SIZE) {
+		return false;
+	}
+	// The center of the PSP's screen (the buffer is often 512 wide).
+	const float centerX = 240.0f;
+	const float centerY = 136.0f;
+	return minX >= centerX - MAX_OFFSET_X && maxX <= centerX + MAX_OFFSET_X && minY >= centerY - MAX_OFFSET_Y && maxY <= centerY + MAX_OFFSET_Y;
+}
+
 void DrawEngineCommon::DecodeVerts(const VertexDecoder *dec, u8 *dest) {
 	const int numDrawVerts = numDrawVerts_;
 	if (!numDrawVerts) {
@@ -1550,6 +1601,10 @@ void DrawEngineCommon::DecodeVerts(const VertexDecoder *dec, u8 *dest) {
 	}
 	numDecodedVerts_ = numDecodedVerts;
 	decodeVertsCounter_ = i;
+
+	if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
+		gstate_c.stereoCentered2D = g_Config.iStereoscopyCrosshairDepth != 0 && IsCentered2DDraw(dec, dest, numDecodedVerts);
+	}
 }
 
 int DrawEngineCommon::DecodeInds() {

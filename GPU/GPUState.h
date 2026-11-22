@@ -505,6 +505,7 @@ enum : u32 {
 enum class StereoDrawClass : uint8_t {
 	WORLD,  // Shifted by depth.
 	UI,  // At the UI depth.
+	CROSSHAIR,  // A small 2D draw near the center of the screen over a 3D scene, at the UI depth plus the crosshair depth.
 	SECOND_LAYER,  // A full screen 2D image (like a menu background), at the second layer parallax.
 	FLAT,  // Not shifted: 2D draws without UI detection, copies of what's already stereo, clears.
 };
@@ -677,6 +678,10 @@ public:
 	StereoDrawClass stereoDrawClass;
 	// The software transform of a through mode draw found it covering the render target.
 	bool stereoFullscreen2D;
+	// DecodeVerts found the current through mode or orthographic draw small and near the center of the screen.
+	bool stereoCentered2D;
+	// Host frames since the last WORLD draw. Crosshairs are only looked for over a 3D scene.
+	int stereoFramesSinceWorld;
 
 	GEBufferFormat framebufFormat;
 	// Some games use a very specific masking setup to draw into the alpha channel of a 4444 target using the blue channel of a 565 target.

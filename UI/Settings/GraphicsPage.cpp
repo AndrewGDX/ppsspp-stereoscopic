@@ -331,6 +331,7 @@ void BuildGraphicsSettings(SettingsPage *page) {
 		page->Setting(&g_Config.fStereoscopyConvergence).Format("%.2f").EnabledFunc(stereoscopyOn).Hint({I18NCat::GRAPHICS, "StereoscopyConvergence Tip", "The distance that appears at screen depth, in the game's units. Varies a lot between games."});
 		page->Setting(&g_Config.iStereoscopyUIDetectionMode).EnabledFunc(stereoscopyOn);
 		page->Setting(&g_Config.iStereoscopyUIDepth).EnabledFunc(uiDetectionOn).LiveUpdate();
+		page->Setting(&g_Config.iStereoscopyCrosshairDepth).EnabledFunc(uiDetectionOn).LiveUpdate().Hint({I18NCat::GRAPHICS, "StereoscopyCrosshairDepth Tip", "Moves small UI near the center of the screen, like a crosshair, from the UI depth. 0 keeps it at the UI depth."});
 		page->Setting(&g_Config.iStereoscopySecondLayerParallax).EnabledFunc(uiDetectionOn).LiveUpdate();
 		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([draw]() {
 			return StereoscopyUIThresholdOn(draw);

@@ -301,7 +301,7 @@ static StereoDrawClass ClassifyStereoDraw() {
 		return through && gstate_c.stereoFullscreen2D ? StereoDrawClass::SECOND_LAYER : StereoDrawClass::UI;
 	}
 	if (detection == StereoscopyUIDetection::ADVANCED && !gstate.isDepthTestEnabled() && !gstate.isDepthWriteEnabled()) {
-		return StereoDrawClass::UI;
+		return StereoDrawClass::SECOND_LAYER;
 	}
 	return StereoDrawClass::WORLD;
 }
@@ -320,7 +320,7 @@ void UpdateStereoDrawClass() {
 static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 	// The eyes move apart by the separation, which in clip space is the share of the target's half width.
 	// The dominant eye stays put, and the other moves all of it.
-	const float separation = g_Config.fStereoscopySeparation * (1.0f / 3000.0f);
+	const float separation = g_Config.fStereoscopySeparation * 0.001f;
 	float left = -separation;
 	float right = separation;
 	switch ((StereoscopyDominantEye)g_Config.iStereoscopyDominantEye) {
@@ -343,16 +343,18 @@ static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 	}
 	ub->stereoEyeScale[0] = left;
 	ub->stereoEyeScale[1] = right;
-	ub->stereoConvergence = g_Config.fStereoscopyConvergence;
+	const float convergence = std::clamp(g_Config.fStereoscopyConvergence, 0.0f, 200.0f);
+	ub->stereoConvergence = convergence / 10.0f + (3000.0f - 200.0f / 10.0f) * std::pow(convergence / 200.0f, 4.0f);
 	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::SECOND_LAYER) ? 1.0f : 0.0f;
-	// At most the separation either way, like the far distance.
-	const int depth = drawClass == StereoDrawClass::SECOND_LAYER ? g_Config.iStereoscopySecondLayerParallax : g_Config.iStereoscopyUIDepth;
-	ub->stereoUIDepth = (float)std::clamp(depth, -100, 100) * 0.01f;
-	// Unsafe and advanced detection also put 3D vertices nearer than the threshold (as a share of the
-	// convergence distance) at the UI depth.
 	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
-	const bool useThreshold = drawClass == StereoDrawClass::WORLD && (detection == StereoscopyUIDetection::UNSAFE || detection == StereoscopyUIDetection::ADVANCED);
-	ub->stereoUIThresholdW = useThreshold ? (float)g_Config.iStereoscopyUIDetectionThreshold * 0.001f * g_Config.fStereoscopyConvergence : -std::numeric_limits<float>::max();
+	// Threshold-detected world vertices use UI depth; other Advanced-only detections use the second layer.
+	const bool advancedWorld = drawClass == StereoDrawClass::WORLD && detection == StereoscopyUIDetection::ADVANCED;
+	const bool secondLayer = drawClass == StereoDrawClass::SECOND_LAYER;
+	// At most the separation either way, like the far distance.
+	const int depth = secondLayer ? g_Config.iStereoscopySecondLayerParallax : g_Config.iStereoscopyUIDepth;
+	ub->stereoUIDepth = (float)std::clamp(depth, -100, 100) * 0.01f;
+	// Advanced detection puts world vertices nearer than the configured clip-w threshold at UI depth.
+	ub->stereoUIThresholdW = advancedWorld ? (float)g_Config.iStereoscopyUIDetectionThreshold : -std::numeric_limits<float>::max();
 }
 
 void DirtyDepalForDraw(bool pixelMapped) {

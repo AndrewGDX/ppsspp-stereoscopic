@@ -36,7 +36,6 @@
 #include "Core/System.h"
 #include "GPU/Common/PostShader.h"
 #include "GPU/Common/PresentationCommon.h"
-#include "UI/ControlMappingScreen.h"
 #include "UI/DevScreens.h"
 #include "UI/DisplayLayoutScreen.h"
 #include "UI/MiscScreens.h"
@@ -328,19 +327,14 @@ void BuildGraphicsSettings(SettingsPage *page) {
 		}
 		page->Setting(&g_Config.iStereoscopyDominantEye).EnabledFunc(stereoscopyOn);
 		page->Setting(&g_Config.bStereoscopySwapEyes).EnabledFunc(stereoscopyOn);
-		page->Setting(&g_Config.fStereoscopySeparation).EnabledFunc(stereoscopyOn);
-		page->Setting(&g_Config.fStereoscopyConvergence).EnabledFunc(stereoscopyOn).Hint({I18NCat::GRAPHICS, "StereoscopyConvergence Tip", "The distance that appears at screen depth, in the game's units. Varies a lot between games."});
+		page->Setting(&g_Config.fStereoscopySeparation).Format("%.2f").EnabledFunc(stereoscopyOn);
+		page->Setting(&g_Config.fStereoscopyConvergence).Format("%.2f").EnabledFunc(stereoscopyOn).Hint({I18NCat::GRAPHICS, "StereoscopyConvergence Tip", "The distance that appears at screen depth, in the game's units. Varies a lot between games."});
 		page->Setting(&g_Config.iStereoscopyUIDetectionMode).EnabledFunc(stereoscopyOn);
 		page->Setting(&g_Config.iStereoscopyUIDepth).EnabledFunc(uiDetectionOn).LiveUpdate();
 		page->Setting(&g_Config.iStereoscopySecondLayerParallax).EnabledFunc(uiDetectionOn).LiveUpdate();
 		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([draw]() {
 			return StereoscopyUIThresholdOn(draw);
 		}).LiveUpdate();
-		// The overlay that changes these in game.
-		page->Setting(&g_Config.iStereoscopyOverlayPosition);
-		page->Choice("Overlay hotkey").OpensScreen().OnClick([host](UI::EventParams &) {
-			host->PageScreenManager()->push(new ControlMappingScreen(host->PageGamePath()));
-		}).Hint({I18NCat::GRAPHICS, "StereoscopyOverlayHotkey Tip", "Opens the overlay in game. Set it under Emulator controls."});
 	}
 
 	page->Header("Frame Rate Control");

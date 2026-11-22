@@ -366,6 +366,9 @@ static UI::View *CreateSettingViewInner(const SettingItem &item, I18NCat pageCat
 	case SettingType::FloatSlider:
 	{
 		PopupSliderChoiceFloat *slider = parent->Add(new PopupSliderChoiceFloat((float *)item.ptr, item.fMinValue, item.fMaxValue, item.fDefaultValue, text, item.fStep, screenManager, item.units));
+		if (!item.format.empty()) {
+			slider->SetFormat(item.format);
+		}
 		if (item.liveUpdate) {
 			slider->SetLiveUpdate(true);
 		}

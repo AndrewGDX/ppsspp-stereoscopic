@@ -351,17 +351,16 @@ enum class StereoscopyDominantEye : int {
 
 enum class StereoscopyUIDetection : int {
 	OFF,
-	UNSAFE,
 	SAFE,
 	ADVANCED,
 };
 
 // Where the in-game stereoscopy overlay goes, in each eye.
 enum class StereoscopyOverlayPosition : int {
-	CENTER_LEFT,
-	CENTER_RIGHT,
-	TOP_CENTER,
-	BOTTOM_CENTER,
+	LEFT,
+	RIGHT,
+	TOP,
+	BOTTOM,
 };
 
 enum class RemoteISOShareType : int {

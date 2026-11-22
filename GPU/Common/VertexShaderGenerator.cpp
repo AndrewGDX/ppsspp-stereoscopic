@@ -1026,9 +1026,10 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 	if (useStereoscopy) {
 		// Each eye moves by its scale times (w - convergence), so at the convergence distance the eyes agree.
 		// UI goes at a fixed depth instead (in clip space, so times w).
+		// Bound the final per-eye shift to 0.2 NDC, including dominant-eye scaling.
 		WRITE(p, "  float stereoDepth = outPos.w - u_stereo.z;\n");
 		WRITE(p, "  if (u_stereo.w > 0.5 || outPos.w < u_stereoUI.y) stereoDepth = u_stereoUI.x * outPos.w;\n");
-		WRITE(p, "  outPos.x += (%s == 0 ? u_stereo.x : u_stereo.y) * stereoDepth;\n", stereoEye);
+		WRITE(p, "  outPos.x += clamp((%s == 0 ? u_stereo.x : u_stereo.y) * stereoDepth, -0.2 * abs(outPos.w), 0.2 * abs(outPos.w));\n", stereoEye);
 	}
 
 	if (gstate_c.Use(GPU_ROUND_DEPTH_TO_16BIT)) {

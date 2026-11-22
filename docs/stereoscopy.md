@@ -39,9 +39,12 @@ clip_x += eyeScale * (w - convergence)
 ```
 
 `eyeScale` is minus the separation for the left eye and plus for the right, or 0 and twice the separation
-with a dominant eye. Separation is the setting / 3000, in clip space (a share of the render target's half
-width). Convergence is in the game's own w units, which differ a lot between games. At w = convergence the
-eyes agree (screen depth). UI goes at a fixed depth instead: `uiDepth * w`, at most the separation either way.
+with a dominant eye. Separation is the setting / 1000, in clip space (a share of the render target's half
+width). For a convergence setting c (limited to 0..200), the convergence distance is
+`c / 10 + 2980 * (c / 200)^4`, in the game's own w units (0..3000). The final per-eye shift is clamped
+to ±0.2 NDC after dominant-eye scaling. At w = convergence the eyes agree (screen depth). Detected UI
+uses the configured UI or Second Layer
+depth exactly, without a contribution from its original Z: `uiDepth * w`.
 
 ## UI detection
 
@@ -50,12 +53,14 @@ it costs no shader variants:
 
 - **Flat** (not shifted): clears, 2D draws of framebuffers (post effects, compositing, already stereo), and
   with detection off, all through mode and orthographic draws.
-- **UI**: through mode draws and orthographic projections (constant w). Also 3D draws without depth test
-  and depth write, in Advanced mode.
+- **UI**: through mode draws and orthographic projections (constant w).
 - **Second layer**: a through mode draw covering at least 90% of the render target, like a menu background
-  (`stereoFullscreen2D`, from the software transform).
-- **World**: everything else, shifted by depth. In Unsafe and Advanced modes, vertices nearer than the
-  threshold (as a share of the convergence distance) go at the UI depth, in the vertex shader.
+  (`stereoFullscreen2D`, from the software transform). In Advanced mode, also 3D draws without depth
+  test and depth write. These Advanced-only draw detections follow Second Layer Parallax.
+  Safe UI keeps its usual UI depth.
+- **World**: everything else, shifted by depth. In Advanced mode, world vertices with clip w below
+  UI Detection Threshold (in the game's w units) use the configured UI depth exactly, in the vertex
+  shader.
 
 ## Presentation
 
@@ -88,7 +93,7 @@ keeps its default in a `controls.ini` from before it existed (`KeepsDefaultIfMis
   closes the overlay and maps to Pause, and the overlay is already closed by the time the queue runs.
 - **Changes** apply right away (the mode posts `GPU_CONFIG_CHANGED`, the rest are uniforms). The config is
   saved once, on close, if anything changed, to the game's ini when it has one. The header says which.
-- **Drawing.** It's laid out for the whole screen in UI units, then drawn once per eye with that eye's
+- **Drawing.** The panel background is 25% transparent. It's laid out for the whole screen in UI units, then drawn once per eye with that eye's
   viewport (`GetStereoscopyEyeViewports`), so the display's stretch of a half mode eye gives it the right
   aspect. Both eyes get the same image, which puts it at screen depth regardless of the UI depth. Touches are
   mapped back through the eye they land in. Without stereoscopy it's drawn once.

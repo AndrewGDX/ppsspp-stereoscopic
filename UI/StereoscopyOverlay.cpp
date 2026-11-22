@@ -51,7 +51,7 @@ bool StereoscopyUIDetectionOn(Draw::DrawContext *draw) {
 
 bool StereoscopyUIThresholdOn(Draw::DrawContext *draw) {
 	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
-	return StereoscopyUIDetectionOn(draw) && (detection == StereoscopyUIDetection::UNSAFE || detection == StereoscopyUIDetection::ADVANCED);
+	return StereoscopyUIDetectionOn(draw) && detection == StereoscopyUIDetection::ADVANCED;
 }
 
 // Sizes in UI units, at scale 1.
@@ -99,7 +99,7 @@ StereoscopyOverlay::StereoscopyOverlay(Draw::DrawContext *draw) : draw_(draw) {
 	add(&g_Config.iStereoscopyUIDetectionMode, RowType::CHOICE, 0.0f, false, &StereoscopyOn);
 	add(&g_Config.iStereoscopyUIDepth, RowType::INT, 1.0f, false, &StereoscopyUIDetectionOn);
 	add(&g_Config.iStereoscopySecondLayerParallax, RowType::INT, 1.0f, false, &StereoscopyUIDetectionOn);
-	add(&g_Config.iStereoscopyUIDetectionThreshold, RowType::INT, 5.0f, false, &StereoscopyUIThresholdOn);
+	add(&g_Config.iStereoscopyUIDetectionThreshold, RowType::INT, 1.0f, false, &StereoscopyUIThresholdOn);
 	// Last, as it's the overlay's own (and not per game).
 	add(&g_Config.iStereoscopyOverlayPosition, RowType::CHOICE, 0.0f, false, nullptr);
 
@@ -474,7 +474,7 @@ void StereoscopyOverlay::Touch(const TouchInput &touch) {
 
 void StereoscopyOverlay::Layout(const Bounds &bounds) {
 	const StereoscopyOverlayPosition position = (StereoscopyOverlayPosition)g_Config.iStereoscopyOverlayPosition;
-	wide_ = position == StereoscopyOverlayPosition::TOP_CENTER || position == StereoscopyOverlayPosition::BOTTOM_CENTER;
+	wide_ = position == StereoscopyOverlayPosition::TOP || position == StereoscopyOverlayPosition::BOTTOM;
 
 	const int count = (int)rows_.size();
 	const int columnRows = wide_ ? STRIP_ROWS : count;
@@ -495,19 +495,19 @@ void StereoscopyOverlay::Layout(const Bounds &bounds) {
 
 	float x, y;
 	switch (position) {
-	case StereoscopyOverlayPosition::CENTER_RIGHT:
+	case StereoscopyOverlayPosition::RIGHT:
 		x = bounds.x2() - margin - w;
 		y = bounds.centerY() - h * 0.5f;
 		break;
-	case StereoscopyOverlayPosition::TOP_CENTER:
+	case StereoscopyOverlayPosition::TOP:
 		x = bounds.centerX() - w * 0.5f;
 		y = bounds.y + margin;
 		break;
-	case StereoscopyOverlayPosition::BOTTOM_CENTER:
+	case StereoscopyOverlayPosition::BOTTOM:
 		x = bounds.centerX() - w * 0.5f;
 		y = bounds.y2() - margin - h;
 		break;
-	case StereoscopyOverlayPosition::CENTER_LEFT:
+	case StereoscopyOverlayPosition::LEFT:
 	default:
 		x = bounds.x + margin;
 		y = bounds.centerY() - h * 0.5f;
@@ -540,9 +540,9 @@ void StereoscopyOverlay::Draw(UIContext &dc, const Bounds &bounds) {
 	auto gr = GetI18NCategory(I18NCat::GRAPHICS);
 
 	dc.SetFontScale(s, s);
-	dc.DrawRectDropShadow(panel_, CORNER_RADIUS * s, 0.5f);
-	// Opaque, as the game's own text behind it would show through.
-	dc.FillRoundRect(UI::Drawable(colorAlpha(theme.popupStyle.background.color, 1.0f)), panel_, CORNER_RADIUS * s);
+	dc.DrawRectDropShadow(panel_, CORNER_RADIUS * s, 0.375f);
+	// Keep the game visible behind the panel.
+	dc.FillRoundRect(UI::Drawable(colorAlpha(theme.popupStyle.background.color, 0.75f)), panel_, CORNER_RADIUS * s);
 
 	// The title, and whose settings these are.
 	std::string config;
@@ -590,7 +590,7 @@ void StereoscopyOverlay::DrawRow(UIContext &dc, const Row &row, bool selected) {
 
 	uint32_t textColor = theme.popupStyle.fgColor;
 	if (selected) {
-		dc.FillRoundRect(UI::Drawable(theme.itemFocusedStyle.background.color), row.bounds, 6.0f * s);
+		dc.FillRoundRect(UI::Drawable(colorAlpha(theme.itemFocusedStyle.background.color, 0.75f)), row.bounds, 6.0f * s);
 		textColor = theme.itemFocusedStyle.fgColor;
 	}
 	if (!enabled) {

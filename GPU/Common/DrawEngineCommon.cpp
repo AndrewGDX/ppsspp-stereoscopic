@@ -1513,11 +1513,13 @@ bool DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimiti
 }
 
 // For stereoscopy's 2D draw detection (ClassifyStereoDraw): the bounding box of a through mode or orthographic
-// draw in PSP pixels, and in through mode, of its texture coordinates in texels.
-static void UpdateStereoBounds2D(const VertexDecoder *dec, const u8 *decoded, int count) {
+// draw in PSP pixels, and in through mode, of its texture coordinates in texels. Draws that cover no area are
+// left out: Peace Walker draws each part of a rifle's crosshair along with five rectangles at 0,0 with all their
+// vertex data zero, which are merged into one batch.
+void DrawEngineCommon::UpdateStereoBounds2D(const VertexDecoder *dec, const u8 *decoded) {
 	gstate_c.stereoHasBounds2D = false;
 	gstate_c.stereoHasUVBounds2D = false;
-	if (count == 0 || (dec->VertexType() & GE_VTYPE_WEIGHT_MASK) || (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode == StereoscopyUIDetection::OFF) {
+	if ((dec->VertexType() & GE_VTYPE_WEIGHT_MASK) || (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode == StereoscopyUIDetection::OFF) {
 		return;
 	}
 	const bool through = gstate.isModeThrough();
@@ -1525,43 +1527,62 @@ static void UpdateStereoBounds2D(const VertexDecoder *dec, const u8 *decoded, in
 	if (!through && !(gstate.projMatrix[3] == 0.0f && gstate.projMatrix[7] == 0.0f && gstate.projMatrix[11] == 0.0f)) {
 		return;
 	}
+	// Lines and points draw something even when they're thin in one direction (or both).
+	const bool needsArea = prevPrim_ == GE_PRIM_RECTANGLES || prevPrim_ == GE_PRIM_TRIANGLES || prevPrim_ == GE_PRIM_TRIANGLE_STRIP || prevPrim_ == GE_PRIM_TRIANGLE_FAN;
 
 	VertexReader reader(decoded, dec->GetDecVtxFmt(), dec->VertexType());
 	const bool hasUV = through && reader.hasUV();
-	float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-	float minU = FLT_MAX, minV = FLT_MAX, maxU = -FLT_MAX, maxV = -FLT_MAX;
-	for (int i = 0; i < count; i++) {
-		reader.Goto(i);
-		float pos[3];
-		reader.ReadPosAuto(pos);
-		float x = pos[0];
-		float y = pos[1];
-		if (!through) {
-			float projpos[4];
-			Vec3ByMatrix44(projpos, pos, gstate_c.worldviewproj);
-			if (fabsf(projpos[3]) < 1e-6f) {
-				return;
+	StereoBounds2D bounds = { FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+	StereoBounds2D uvBounds = { FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+	bool any = false;
+	// Each draw's vertices follow the last one's, as DecodeVerts puts them.
+	int start = 0;
+	for (int i = 0; i < numDrawVerts_; i++) {
+		const DeferredVerts &dv = drawVerts_[i];
+		const int count = dv.indexUpperBound - dv.indexLowerBound + 1;
+		if (start + count > numDecodedVerts_) {
+			break;
+		}
+		StereoBounds2D draw = { FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+		StereoBounds2D drawUV = { FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX };
+		for (int j = start; j < start + count; j++) {
+			reader.Goto(j);
+			float pos[3];
+			reader.ReadPosAuto(pos);
+			float x = pos[0];
+			float y = pos[1];
+			if (!through) {
+				float projpos[4];
+				Vec3ByMatrix44(projpos, pos, gstate_c.worldviewproj);
+				if (fabsf(projpos[3]) < 1e-6f) {
+					return;
+				}
+				x = projpos[0] / projpos[3] * gstate.getViewportXScale() + gstate.getViewportXCenter() - gstate.getOffsetX();
+				y = projpos[1] / projpos[3] * gstate.getViewportYScale() + gstate.getViewportYCenter() - gstate.getOffsetY();
 			}
-			x = projpos[0] / projpos[3] * gstate.getViewportXScale() + gstate.getViewportXCenter() - gstate.getOffsetX();
-			y = projpos[1] / projpos[3] * gstate.getViewportYScale() + gstate.getViewportYCenter() - gstate.getOffsetY();
+			draw = { std::min(draw.x1, x), std::min(draw.y1, y), std::max(draw.x2, x), std::max(draw.y2, y) };
+			if (hasUV) {
+				float uv[2];
+				reader.ReadUV(uv);
+				drawUV = { std::min(drawUV.x1, uv[0]), std::min(drawUV.y1, uv[1]), std::max(drawUV.x2, uv[0]), std::max(drawUV.y2, uv[1]) };
+			}
 		}
-		minX = std::min(minX, x);
-		maxX = std::max(maxX, x);
-		minY = std::min(minY, y);
-		maxY = std::max(maxY, y);
-		if (hasUV) {
-			float uv[2];
-			reader.ReadUV(uv);
-			minU = std::min(minU, uv[0]);
-			maxU = std::max(maxU, uv[0]);
-			minV = std::min(minV, uv[1]);
-			maxV = std::max(maxV, uv[1]);
+		start += count;
+		const bool flat = needsArea ? (draw.x2 <= draw.x1 || draw.y2 <= draw.y1) : (draw.x2 <= draw.x1 && draw.y2 <= draw.y1);
+		if (count == 0 || flat) {
+			continue;
 		}
+		bounds = { std::min(bounds.x1, draw.x1), std::min(bounds.y1, draw.y1), std::max(bounds.x2, draw.x2), std::max(bounds.y2, draw.y2) };
+		uvBounds = { std::min(uvBounds.x1, drawUV.x1), std::min(uvBounds.y1, drawUV.y1), std::max(uvBounds.x2, drawUV.x2), std::max(uvBounds.y2, drawUV.y2) };
+		any = true;
 	}
-	gstate_c.stereoBounds2D = { minX, minY, maxX, maxY };
+	if (!any) {
+		return;
+	}
+	gstate_c.stereoBounds2D = bounds;
 	gstate_c.stereoHasBounds2D = true;
 	if (hasUV) {
-		gstate_c.stereoUVBounds2D = { minU, minV, maxU, maxV };
+		gstate_c.stereoUVBounds2D = uvBounds;
 		gstate_c.stereoHasUVBounds2D = true;
 	}
 }
@@ -1606,7 +1627,7 @@ void DrawEngineCommon::DecodeVerts(const VertexDecoder *dec, u8 *dest) {
 	decodeVertsCounter_ = i;
 
 	if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
-		UpdateStereoBounds2D(dec, dest, numDecodedVerts);
+		UpdateStereoBounds2D(dec, dest);
 	}
 }
 

@@ -61,7 +61,10 @@ it costs no shader variants:
   within 120x80 pixels of it, in this host frame so far and in the last one that drew something
   (`stereoNearCenter2D`), so a menu drawn after its icons counts too. Peace Walker's HUD has none there,
   its inventory about 30, with icons and text in the crosshair's area. `DecodeVerts` finds the box
-  (`stereoBounds2D`), for orthographic draws through the world-view-projection and viewport. It's at the UI depth plus the Crosshair Depth (the sum clamped to
+  (`stereoBounds2D`), for orthographic draws through the world-view-projection and viewport, from the
+  draws in the batch that cover an area: Peace Walker draws each part of a rifle's crosshair with five
+  rectangles at 0,0 whose vertex data is all zero, merged into its batch, which made the crosshair's own
+  parts count as busy. It's at the UI depth plus the Crosshair Depth (the sum clamped to
   ±100), so 0 leaves it with the UI. Peace Walker's aiming reticle is four dots, each an orthographic quad
   of a few pixels; its 64x64 blur buffers are what the render target size rule keeps out.
 - **Probe** and **probe copy** (`ClassifyStereoProbe`): lens flares measure how much of the sun is hidden

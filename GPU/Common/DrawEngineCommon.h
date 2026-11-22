@@ -176,6 +176,7 @@ protected:
 	bool CheckClipFlags(bool useHwTransform) const;
 
 	void DecodeVerts(const VertexDecoder *dec, u8 *dest);
+	void UpdateStereoBounds2D(const VertexDecoder *dec, const u8 *decoded);
 	int DecodeInds();
 
 	// How many vertices software transform turns a prim into, for the prims it expands to quads.

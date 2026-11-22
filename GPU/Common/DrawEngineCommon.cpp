@@ -1512,39 +1512,35 @@ bool DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimiti
 	return true;
 }
 
-// For stereoscopy's crosshair depth: a through mode or orthographic draw that's small and near the center of
-// the screen, like a crosshair (Metal Gear Solid: Peace Walker draws its dots in ortho, each a few pixels).
-static bool IsCentered2DDraw(const VertexDecoder *dec, const u8 *decoded, int count) {
-	// The largest crosshair part, and how far from the center its edges can be, in PSP pixels.
-	const float MAX_SIZE = 64.0f;
-	const float MAX_OFFSET_X = 64.0f;
-	const float MAX_OFFSET_Y = 48.0f;
-
-	// Small render targets are effect buffers (Peace Walker blurs in 64x64 ones), and anything is small there.
-	if (gstate_c.curRTWidth < 480 || gstate_c.curRTHeight < 272) {
-		return false;
-	}
-	if (count == 0 || gstate.isModeClear() || (dec->VertexType() & GE_VTYPE_WEIGHT_MASK)) {
-		return false;
+// For stereoscopy's 2D draw detection (ClassifyStereoDraw): the bounding box of a through mode or orthographic
+// draw in PSP pixels, and in through mode, of its texture coordinates in texels.
+static void UpdateStereoBounds2D(const VertexDecoder *dec, const u8 *decoded, int count) {
+	gstate_c.stereoHasBounds2D = false;
+	gstate_c.stereoHasUVBounds2D = false;
+	if (count == 0 || (dec->VertexType() & GE_VTYPE_WEIGHT_MASK) || (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode == StereoscopyUIDetection::OFF) {
+		return;
 	}
 	const bool through = gstate.isModeThrough();
 	// Like ClassifyStereoDraw: a constant w.
 	if (!through && !(gstate.projMatrix[3] == 0.0f && gstate.projMatrix[7] == 0.0f && gstate.projMatrix[11] == 0.0f)) {
-		return false;
+		return;
 	}
 
-	const DecVtxFormat &fmt = dec->GetDecVtxFmt();
+	VertexReader reader(decoded, dec->GetDecVtxFmt(), dec->VertexType());
+	const bool hasUV = through && reader.hasUV();
 	float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+	float minU = FLT_MAX, minV = FLT_MAX, maxU = -FLT_MAX, maxV = -FLT_MAX;
 	for (int i = 0; i < count; i++) {
-		// Always DEC_FLOAT_3.
-		const float *pos = (const float *)(decoded + i * fmt.stride + fmt.posoff);
+		reader.Goto(i);
+		float pos[3];
+		reader.ReadPosAuto(pos);
 		float x = pos[0];
 		float y = pos[1];
 		if (!through) {
 			float projpos[4];
 			Vec3ByMatrix44(projpos, pos, gstate_c.worldviewproj);
 			if (fabsf(projpos[3]) < 1e-6f) {
-				return false;
+				return;
 			}
 			x = projpos[0] / projpos[3] * gstate.getViewportXScale() + gstate.getViewportXCenter() - gstate.getOffsetX();
 			y = projpos[1] / projpos[3] * gstate.getViewportYScale() + gstate.getViewportYCenter() - gstate.getOffsetY();
@@ -1553,14 +1549,21 @@ static bool IsCentered2DDraw(const VertexDecoder *dec, const u8 *decoded, int co
 		maxX = std::max(maxX, x);
 		minY = std::min(minY, y);
 		maxY = std::max(maxY, y);
+		if (hasUV) {
+			float uv[2];
+			reader.ReadUV(uv);
+			minU = std::min(minU, uv[0]);
+			maxU = std::max(maxU, uv[0]);
+			minV = std::min(minV, uv[1]);
+			maxV = std::max(maxV, uv[1]);
+		}
 	}
-	if (maxX - minX > MAX_SIZE || maxY - minY > MAX_SIZE) {
-		return false;
+	gstate_c.stereoBounds2D = { minX, minY, maxX, maxY };
+	gstate_c.stereoHasBounds2D = true;
+	if (hasUV) {
+		gstate_c.stereoUVBounds2D = { minU, minV, maxU, maxV };
+		gstate_c.stereoHasUVBounds2D = true;
 	}
-	// The center of the PSP's screen (the buffer is often 512 wide).
-	const float centerX = 240.0f;
-	const float centerY = 136.0f;
-	return minX >= centerX - MAX_OFFSET_X && maxX <= centerX + MAX_OFFSET_X && minY >= centerY - MAX_OFFSET_Y && maxY <= centerY + MAX_OFFSET_Y;
 }
 
 void DrawEngineCommon::DecodeVerts(const VertexDecoder *dec, u8 *dest) {
@@ -1603,7 +1606,7 @@ void DrawEngineCommon::DecodeVerts(const VertexDecoder *dec, u8 *dest) {
 	decodeVertsCounter_ = i;
 
 	if (gstate_c.Use(GPU_USE_STEREOSCOPY)) {
-		gstate_c.stereoCentered2D = g_Config.iStereoscopyCrosshairDepth != 0 && IsCentered2DDraw(dec, dest, numDecodedVerts);
+		UpdateStereoBounds2D(dec, dest, numDecodedVerts);
 	}
 }
 

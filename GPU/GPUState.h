@@ -506,12 +506,25 @@ enum class StereoDrawClass : uint8_t {
 	WORLD,  // Shifted by depth.
 	UI,  // At the UI depth.
 	CROSSHAIR,  // A small 2D draw near the center of the screen over a 3D scene, at the UI depth plus the crosshair depth.
+	PROBE,  // A 2D draw exactly over a StereoProbeArea, at the far distance.
+	PROBE_COPY,  // A copy out of a StereoProbeArea: not shifted, but samples the area shifted to the far distance.
 	SECOND_LAYER,  // A full screen 2D image (like a menu background), at the second layer parallax.
 	FLAT,  // Not shifted: 2D draws without UI detection, copies of what's already stereo, clears.
 };
 
 // Note that this take a flag index, not the bit value.
 const char *GpuUseFlagToString(int useFlag);
+
+struct StereoBounds2D {
+	float x1, y1, x2, y2;
+};
+
+// GPU_USE_STEREOSCOPY: a small area of a framebuffer that a 2D draw copied into another, in its pixels. See
+// ClassifyStereoProbe.
+struct StereoProbeArea {
+	u32 fbAddress;  // In VRAM, without the mirror bits.
+	StereoBounds2D bounds;
+};
 
 struct KnownVertexBounds {
 	u16 minU;
@@ -678,10 +691,17 @@ public:
 	StereoDrawClass stereoDrawClass;
 	// The software transform of a through mode draw found it covering the render target.
 	bool stereoFullscreen2D;
-	// DecodeVerts found the current through mode or orthographic draw small and near the center of the screen.
-	bool stereoCentered2D;
+	// DecodeVerts: the bounding box of the current through mode or orthographic draw in PSP pixels, and in
+	// through mode, of its texture coordinates in texels.
+	bool stereoHasBounds2D;
+	bool stereoHasUVBounds2D;
+	StereoBounds2D stereoBounds2D;
+	StereoBounds2D stereoUVBounds2D;
 	// Host frames since the last WORLD draw. Crosshairs are only looked for over a 3D scene.
 	int stereoFramesSinceWorld;
+	// Areas copied out in this host frame.
+	StereoProbeArea stereoProbeAreas[8];
+	int numStereoProbeAreas;
 
 	GEBufferFormat framebufFormat;
 	// Some games use a very specific masking setup to draw into the alpha channel of a 4444 target using the blue channel of a 565 target.

@@ -73,6 +73,7 @@ void GPUCommon::BeginHostFrame(const DisplayLayoutConfig &config) {
 	if (gstate_c.stereoFramesSinceWorld < 2) {
 		gstate_c.stereoFramesSinceWorld++;
 	}
+	gstate_c.numStereoProbeAreas = 0;
 
 	// TODO: Assume config may have changed - maybe move to resize.
 	gstate_c.Dirty(DIRTY_ALL);

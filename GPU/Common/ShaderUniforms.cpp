@@ -284,22 +284,107 @@ void VRUpdateUniforms(UB_VS_FS_Base *base, UB_VS_VR *vr, uint64_t dirtyUniforms)
 	}
 }
 
-static StereoDrawClass ClassifyStereoDraw() {
-	if (gstate.isModeClear()) {
-		// Shifting a clear would leave a strip at the edge uncleared.
-		return StereoDrawClass::FLAT;
+static bool SameBounds(const StereoBounds2D &a, const StereoBounds2D &b) {
+	return fabsf(a.x1 - b.x1) <= 1.0f && fabsf(a.y1 - b.y1) <= 1.0f && fabsf(a.x2 - b.x2) <= 1.0f && fabsf(a.y2 - b.y2) <= 1.0f;
+}
+
+static bool InsideBounds(const StereoBounds2D &inner, const StereoBounds2D &outer) {
+	return inner.x1 >= outer.x1 - 1.0f && inner.y1 >= outer.y1 - 1.0f && inner.x2 <= outer.x2 + 1.0f && inner.y2 <= outer.y2 + 1.0f;
+}
+
+// A lens flare finds out how much of the sun is hidden with a probe. Peace Walker copies an 8x8 area at the sun
+// out of the frame, draws black and then white over it with a depth test at the sun's depth, copies the result
+// out to measure it, and puts the saved pixels back. Each eye has to do all of that where it sees the sun, or the
+// probe shows (the copies aren't shifted) and measures the wrong pixels. So a small area that a 2D draw copies
+// out of a framebuffer is remembered, 2D draws exactly over it go to the far distance (PROBE), and copies out of
+// it sample it shifted the same way (PROBE_COPY). Returns WORLD for neither.
+static StereoDrawClass ClassifyStereoProbe(bool through) {
+	// Larger copies are effects of the whole frame, like bloom.
+	const float MAX_SIZE = 64.0f;
+
+	const u32 target = gstate.getFrameBufRawAddress();
+	for (int i = 0; i < gstate_c.numStereoProbeAreas; i++) {
+		const StereoProbeArea &area = gstate_c.stereoProbeAreas[i];
+		if (area.fbAddress == target && SameBounds(gstate_c.stereoBounds2D, area.bounds)) {
+			return StereoDrawClass::PROBE;
+		}
 	}
+
+	// A copy from another framebuffer. A texture that starts inside one has an offset we don't map back.
+	if (!through || !gstate_c.stereoHasUVBounds2D || !gstate.isTextureMapEnabled() || !gstate_c.textureIsFramebuffer || gstate_c.curTextureXOffset != 0 || gstate_c.curTextureYOffset != 0) {
+		return StereoDrawClass::WORLD;
+	}
+	// Probes sample the scene. Small framebuffers are effect buffers (Peace Walker's 64x64 blur ones), which
+	// are copied whole.
+	if (gstate_c.curTextureWidth < 480 || gstate_c.curTextureHeight < 272) {
+		return StereoDrawClass::WORLD;
+	}
+	const u32 source = gstate.getTextureAddress(0) & 0x1FFFF0;
+	const StereoBounds2D &uv = gstate_c.stereoUVBounds2D;
+	if (source == target || uv.x2 - uv.x1 > MAX_SIZE || uv.y2 - uv.y1 > MAX_SIZE || uv.x2 <= uv.x1 || uv.y2 <= uv.y1) {
+		return StereoDrawClass::WORLD;
+	}
+	for (int i = 0; i < gstate_c.numStereoProbeAreas; i++) {
+		const StereoProbeArea &area = gstate_c.stereoProbeAreas[i];
+		if (area.fbAddress == source && InsideBounds(uv, area.bounds)) {
+			return StereoDrawClass::PROBE_COPY;
+		}
+	}
+	if (gstate_c.numStereoProbeAreas < (int)ARRAY_SIZE(gstate_c.stereoProbeAreas)) {
+		gstate_c.stereoProbeAreas[gstate_c.numStereoProbeAreas++] = { source, uv };
+	}
+	return StereoDrawClass::PROBE_COPY;
+}
+
+// A small 2D draw near the center of the screen, like a crosshair (Peace Walker draws its dots in ortho, each a
+// few pixels).
+static bool IsCrosshair2D() {
+	// The largest crosshair part, and how far from the center its edges can be, in PSP pixels.
+	const float MAX_SIZE = 64.0f;
+	const float MAX_OFFSET_X = 64.0f;
+	const float MAX_OFFSET_Y = 48.0f;
+	// The center of the PSP's screen (the buffer is often 512 wide).
+	const float CENTER_X = 240.0f;
+	const float CENTER_Y = 136.0f;
+
+	// Over a 3D scene drawn in this host frame or the last (a game at 30 FPS can draw a frame across two).
+	if (g_Config.iStereoscopyCrosshairDepth == 0 || !gstate_c.stereoHasBounds2D || gstate_c.stereoFramesSinceWorld > 1) {
+		return false;
+	}
+	// Small render targets are effect buffers (Peace Walker blurs in 64x64 ones), and anything is small there.
+	if (gstate_c.curRTWidth < 480 || gstate_c.curRTHeight < 272) {
+		return false;
+	}
+	const StereoBounds2D &b = gstate_c.stereoBounds2D;
+	if (b.x2 - b.x1 > MAX_SIZE || b.y2 - b.y1 > MAX_SIZE) {
+		return false;
+	}
+	return b.x1 >= CENTER_X - MAX_OFFSET_X && b.x2 <= CENTER_X + MAX_OFFSET_X && b.y1 >= CENTER_Y - MAX_OFFSET_Y && b.y2 <= CENTER_Y + MAX_OFFSET_Y;
+}
+
+static StereoDrawClass ClassifyStereoDraw() {
 	const bool through = gstate.isModeThrough();
 	// A projection with a constant w (orthographic) has no depth to shift by, like through mode.
 	const bool ortho = !through && gstate.projMatrix[3] == 0.0f && gstate.projMatrix[7] == 0.0f && gstate.projMatrix[11] == 0.0f;
 	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
+	// Without detection, 2D draws aren't shifted, which keeps a probe together too.
+	if ((through || ortho) && detection != StereoscopyUIDetection::OFF && gstate_c.stereoHasBounds2D) {
+		// Before the clear check, as a probe could clear its area.
+		const StereoDrawClass probe = ClassifyStereoProbe(through);
+		if (probe != StereoDrawClass::WORLD) {
+			return probe;
+		}
+	}
+	if (gstate.isModeClear()) {
+		// Shifting a clear would leave a strip at the edge uncleared.
+		return StereoDrawClass::FLAT;
+	}
 	if (through || ortho) {
 		// A framebuffer drawn in 2D (a post effect, or compositing) is already in stereo.
 		if (detection == StereoscopyUIDetection::OFF || (gstate.isTextureMapEnabled() && gstate_c.textureIsFramebuffer)) {
 			return StereoDrawClass::FLAT;
 		}
-		// Over a 3D scene drawn in this host frame or the last (a game at 30 FPS can draw a frame across two).
-		if (gstate_c.stereoCentered2D && gstate_c.stereoFramesSinceWorld <= 1) {
+		if (IsCrosshair2D()) {
 			return StereoDrawClass::CROSSHAIR;
 		}
 		return through && gstate_c.stereoFullscreen2D ? StereoDrawClass::SECOND_LAYER : StereoDrawClass::UI;
@@ -352,7 +437,8 @@ static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 	ub->stereoEyeScale[1] = right;
 	const float convergence = std::clamp(g_Config.fStereoscopyConvergence, 0.0f, 200.0f);
 	ub->stereoConvergence = convergence / 10.0f + (3000.0f - 200.0f / 10.0f) * std::pow(convergence / 200.0f, 4.0f);
-	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::CROSSHAIR || drawClass == StereoDrawClass::SECOND_LAYER) ? 1.0f : 0.0f;
+	const bool probe = drawClass == StereoDrawClass::PROBE || drawClass == StereoDrawClass::PROBE_COPY;
+	ub->stereoForceUI = (drawClass == StereoDrawClass::UI || drawClass == StereoDrawClass::CROSSHAIR || drawClass == StereoDrawClass::SECOND_LAYER || probe) ? 1.0f : 0.0f;
 	const StereoscopyUIDetection detection = (StereoscopyUIDetection)g_Config.iStereoscopyUIDetectionMode;
 	// Threshold-detected world vertices use UI depth; other Advanced-only detections use the second layer.
 	const bool advancedWorld = drawClass == StereoDrawClass::WORLD && detection == StereoscopyUIDetection::ADVANCED;
@@ -364,6 +450,14 @@ static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 		depth += g_Config.iStereoscopyCrosshairDepth;
 	}
 	ub->stereoUIDepth = (float)std::clamp(depth, -100, 100) * 0.01f;
+	if (probe) {
+		// The far distance, where lens flares' suns are (Peace Walker's is 98% of the way there).
+		ub->stereoUIDepth = 1.0f;
+	}
+	// A copy out of a probe area moves its texture coordinates instead. Its source is a framebuffer, whose
+	// width in texels is the same as the probe's render target's in pixels (bufferWidth), so half the shift in
+	// clip space, which spans two of that.
+	ub->stereoUVShift = drawClass == StereoDrawClass::PROBE_COPY ? 0.5f : 0.0f;
 	// Advanced detection puts world vertices nearer than the configured clip-w threshold at UI depth.
 	ub->stereoUIThresholdW = advancedWorld ? (float)g_Config.iStereoscopyUIDetectionThreshold : -std::numeric_limits<float>::max();
 }

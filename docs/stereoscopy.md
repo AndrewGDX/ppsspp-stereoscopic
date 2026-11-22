@@ -57,10 +57,22 @@ it costs no shader variants:
 - **Crosshair**: with Crosshair Depth not 0, a UI draw at most 64 pixels across whose screen bounding box
   lies within 64 pixels of the PSP screen's center horizontally and 48 vertically, in a render target at
   least 480x272, while a World draw happened in this host frame or the last (a 30 FPS game can draw a frame
-  across two). `DecodeVerts` finds the box (`stereoCentered2D`), for orthographic draws through the
+  across two). `DecodeVerts` finds the box (`stereoBounds2D`), for orthographic draws through the
   world-view-projection and viewport. It's at the UI depth plus the Crosshair Depth (the sum clamped to
   ±100), so 0 leaves it with the UI. Peace Walker's aiming reticle is four dots, each an orthographic quad
   of a few pixels; its 64x64 blur buffers are what the render target size rule keeps out.
+- **Probe** and **probe copy** (`ClassifyStereoProbe`): lens flares measure how much of the sun is hidden
+  with a probe. Peace Walker copies the 8x8 pixels at the sun into a scratch buffer, draws black and then
+  white over them with a depth test at the sun's depth, copies the result out and shrinks it to a pixel
+  (the flare's brightness, and a glare over the whole frame), and puts the saved pixels back. Shifted like
+  UI, the squares showed beside the restored pixels, which aren't shifted, and the eyes measured the wrong
+  pixels. So a through mode copy of at most 64x64 texels out of a framebuffer at least 480x272 records the
+  area (`stereoProbeAreas`, for the host frame). A 2D draw exactly over a recorded area (within a pixel)
+  is a probe, at the far distance (UI depth 1), and a copy from inside one samples it shifted by the same
+  amount without moving (`u_stereoUI.z`: the texture coordinates move by half the clip space shift, as the
+  source's width in texels is the width the clip space spans twice). Each eye then probes, measures and
+  restores where it sees the sun. The far distance is where suns are (Peace Walker's is 98% of the way);
+  a probe for something nearer measures beside it by the difference in parallax.
 - **Second layer**: a through mode draw covering at least 90% of the render target, like a menu background
   (`stereoFullscreen2D`, from the software transform). In Advanced mode, also 3D draws without depth
   test and depth write. These Advanced-only draw detections follow Second Layer Parallax.

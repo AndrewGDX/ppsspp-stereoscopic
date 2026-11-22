@@ -1029,7 +1029,14 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		// Bound the final per-eye shift to 0.2 NDC, including dominant-eye scaling.
 		WRITE(p, "  float stereoDepth = outPos.w - u_stereo.z;\n");
 		WRITE(p, "  if (u_stereo.w > 0.5 || outPos.w < u_stereoUI.y) stereoDepth = u_stereoUI.x * outPos.w;\n");
-		WRITE(p, "  outPos.x += clamp((%s == 0 ? u_stereo.x : u_stereo.y) * stereoDepth, -0.2 * abs(outPos.w), 0.2 * abs(outPos.w));\n", stereoEye);
+		WRITE(p, "  float stereoShift = clamp((%s == 0 ? u_stereo.x : u_stereo.y) * stereoDepth, -0.2 * abs(outPos.w), 0.2 * abs(outPos.w));\n", stereoEye);
+		// A copy out of a lens flare's probe area samples it where each eye drew the probe (see ClassifyStereoProbe).
+		// Times z, which the fragment shader divides by with projected texture coordinates (and is 1 otherwise).
+		WRITE(p, "  if (u_stereoUI.z != 0.0) {\n");
+		WRITE(p, "    %sv_texcoord.x += stereoShift / outPos.w * u_stereoUI.z * %sv_texcoord.z;\n", compat.vsOutPrefix, compat.vsOutPrefix);
+		WRITE(p, "  } else {\n");
+		WRITE(p, "    outPos.x += stereoShift;\n");
+		WRITE(p, "  }\n");
 	}
 
 	if (gstate_c.Use(GPU_ROUND_DEPTH_TO_16BIT)) {

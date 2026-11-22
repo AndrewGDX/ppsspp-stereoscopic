@@ -44,8 +44,9 @@ struct alignas(16) UB_VS_FS_Base {
 	float blendFixB[3]; float rotation;
 	// Stereoscopy (GPU_USE_STEREOSCOPY). Each eye's clip x moves by its scale times (w - convergence), or
 	// times uiDepth * w for UI, which the whole draw is (forceUI) or the vertices nearer than thresholdW.
+	// With uvShift, the texture coordinates move instead, by that times the shift in NDC.
 	float stereoEyeScale[2]; float stereoConvergence; float stereoForceUI;
-	float stereoUIDepth; float stereoUIThresholdW; float padding5[2];
+	float stereoUIDepth; float stereoUIThresholdW; float stereoUVShift; float padding5;
 };
 static_assert(sizeof(UB_VS_FS_Base) <= 464, "UB_VS_FS_Base should be 464 bytes");
 

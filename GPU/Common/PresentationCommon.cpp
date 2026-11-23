@@ -1308,7 +1308,8 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	const bool isFinalAtOutputResolution = usePostShader && postShaderFramebuffers_.size() < postShaderPipelines_.size();
 	int lastWidth = srcWidth_;
 	int lastHeight = srcHeight_;
-	if (stereoPost_ && postShaderOutput_) {
+	// The final pass reads what the earlier passes made, not the source.
+	if (postShaderOutput_) {
 		draw_->GetFramebufferDimensions(postShaderOutput_, &lastWidth, &lastHeight);
 	}
 

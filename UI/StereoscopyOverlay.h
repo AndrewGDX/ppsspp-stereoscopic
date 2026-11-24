@@ -42,6 +42,8 @@ bool StereoscopyUIThresholdOn(Draw::DrawContext *draw);
 class StereoscopyOverlay {
 public:
 	explicit StereoscopyOverlay(Draw::DrawContext *draw);
+	// Android replaces the draw context when it loses the surface, which can happen while the overlay is open.
+	void SetDrawContext(Draw::DrawContext *draw) { draw_ = draw; }
 
 	// Keys and axes, all of which the overlay takes while it's open.
 	void Key(const KeyInput &key);

@@ -319,10 +319,11 @@ void BuildGraphicsSettings(SettingsPage *page) {
 
 	if (deviceType != DEVICE_TYPE_VR) {
 		page->Header("Stereoscopy");
-		// The backend doesn't change without a restart, but software rendering and skip buffer effects can.
-		auto stereoscopyAvailable = [draw]() { return StereoscopyAvailable(draw); };
-		auto stereoscopyOn = [draw]() { return StereoscopyOn(draw); };
-		auto uiDetectionOn = [draw]() { return StereoscopyUIDetectionOn(draw); };
+		// Software rendering and skip buffer effects can change while the page is up. The draw context is looked up
+		// each time, as Android replaces it when it loses the surface.
+		auto stereoscopyAvailable = [host]() { return StereoscopyAvailable(host->PageScreenManager()->getDrawContext()); };
+		auto stereoscopyOn = [host]() { return StereoscopyOn(host->PageScreenManager()->getDrawContext()); };
+		auto uiDetectionOn = [host]() { return StereoscopyUIDetectionOn(host->PageScreenManager()->getDrawContext()); };
 #if defined(ANDROID) && !defined(__LIBRETRO__)
 		SettingItem &mode = page->Custom({I18NCat::GRAPHICS, "Stereoscopic 3D Mode"}, [manager = page->Host()->PageScreenManager()](ViewGroup *parent) -> View * {
 			return parent->Add(new DisplayXRModeChoice(manager));
@@ -356,8 +357,8 @@ void BuildGraphicsSettings(SettingsPage *page) {
 		page->Setting(&g_Config.iStereoscopyUIDepth).EnabledFunc(uiDetectionOn).LiveUpdate();
 		page->Setting(&g_Config.iStereoscopyCrosshairDepth).EnabledFunc(uiDetectionOn).LiveUpdate().Hint({I18NCat::GRAPHICS, "StereoscopyCrosshairDepth Tip", "Moves small UI near the center of the screen, like a crosshair, from the UI depth. 0 keeps it at the UI depth."});
 		page->Setting(&g_Config.iStereoscopySecondLayerParallax).EnabledFunc(uiDetectionOn).LiveUpdate();
-		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([draw]() {
-			return StereoscopyUIThresholdOn(draw);
+		page->Setting(&g_Config.iStereoscopyUIDetectionThreshold).EnabledFunc([host]() {
+			return StereoscopyUIThresholdOn(host->PageScreenManager()->getDrawContext());
 		}).LiveUpdate();
 	}
 

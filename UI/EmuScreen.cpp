@@ -1547,10 +1547,17 @@ void EmuScreen::deviceLost() {
 	if (gameBoot_) {
 		gameBoot_->DeviceLost();
 	}
+	if (stereoOverlay_) {
+		// Its rows read as disabled until the device is back.
+		stereoOverlay_->SetDrawContext(nullptr);
+	}
 }
 
 void EmuScreen::deviceRestored(Draw::DrawContext *draw) {
 	UIScreen::deviceRestored(draw);
+	if (stereoOverlay_) {
+		stereoOverlay_->SetDrawContext(draw);
+	}
 }
 
 void EmuScreen::OnDevTools(UI::EventParams &params) {

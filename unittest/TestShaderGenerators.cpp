@@ -385,7 +385,7 @@ const ShaderLanguage languages[] = {
 const int numLanguages = ARRAY_SIZE(languages);
 
 // vr: GPU_USE_VIRTUAL_REALITY is set, which only Vulkan uses.
-// stereoscopy: GPU_USE_STEREOSCOPY is set, which Vulkan, Metal (through Vulkan GLSL) and D3D11 support.
+// stereoscopy: GPU_USE_STEREOSCOPY is set and both eyes use the same depth transform.
 bool TestVertexShaders(bool vr, bool stereoscopy) {
 	char *buffer[numLanguages];
 
@@ -416,14 +416,15 @@ bool TestVertexShaders(bool vr, bool stereoscopy) {
 		}
 		if (stereoscopy) {
 			id.SetBit(VS_BIT_SIMPLE_STEREO);
+		} else if (!vr) {
+			id.SetBit(VS_BIT_SIMPLE_STEREO, false);
 		}
 
 		bool generateSuccess[numLanguages]{};
 		std::string genErrorString[numLanguages];
 
 		for (int j = 0; j < numLanguages; j++) {
-			if ((vr && languages[j] != ShaderLanguage::GLSL_VULKAN) ||
-				(stereoscopy && languages[j] != ShaderLanguage::GLSL_VULKAN && languages[j] != ShaderLanguage::HLSL_D3D11)) {
+			if (vr && languages[j] != ShaderLanguage::GLSL_VULKAN) {
 				buffer[j][0] = '\0';
 				continue;
 			}
@@ -452,6 +453,13 @@ bool TestVertexShaders(bool vr, bool stereoscopy) {
 				std::string errorMessage;
 				if (!TestCompileShader(buffer[j], languages[j], ShaderStage::Vertex, &errorMessage)) {
 					printf("Error compiling vertex shader %d:\n\n%s\n\nERROR: %s\n\n(end of error)\n\n", (int)j, LineNumberString(buffer[j]).c_str(), errorMessage.c_str());
+					for (int i = 0; i < numLanguages; i++) {
+						delete[] buffer[i];
+					}
+					return false;
+				}
+				if (stereoscopy && ShaderLanguageIsOpenGL(languages[j]) && !strstr(buffer[j], "u_stereoEye == 0")) {
+					printf("The OpenGL stereo vertex shader doesn't use the eye uniform:\n\n%s\n", LineNumberString(buffer[j]).c_str());
 					for (int i = 0; i < numLanguages; i++) {
 						delete[] buffer[i];
 					}

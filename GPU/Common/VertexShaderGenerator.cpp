@@ -100,15 +100,15 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 
 	bool useSimpleStereo = id.Bit(VS_BIT_SIMPLE_STEREO);
 	// Stereoscopic 3D on a normal display, as opposed to VR's per-eye views.
-	const bool useStereoscopy = useSimpleStereo && gstate_c.Use(GPU_USE_STEREOSCOPY);
-	// The view (eye) index. With D3D11, each eye is an instance, and the shader picks its layer.
-	const char *stereoEye = compat.shaderLanguage == HLSL_D3D11 ? "In.instanceId" : "gl_ViewIndex";
+	const bool glStereo = useSimpleStereo && ShaderLanguageIsOpenGL(compat.shaderLanguage);
+	const bool useStereoscopy = useSimpleStereo && (glStereo || gstate_c.Use(GPU_USE_STEREOSCOPY));
+	const char *stereoEye = glStereo ? "u_stereoEye" : compat.shaderLanguage == HLSL_D3D11 ? "In.instanceId" : "gl_ViewIndex";
 
 	if (useSimpleStereo) {
 		if (compat.shaderLanguage == ShaderLanguage::GLSL_VULKAN) {
 			extensions.push_back("#extension GL_EXT_multiview : enable");
-		} else if (compat.shaderLanguage != HLSL_D3D11 || !useStereoscopy) {
-			*errorString = "Single pass stereo is only supported with Vulkan and D3D11";
+		} else if (!glStereo && (compat.shaderLanguage != HLSL_D3D11 || !useStereoscopy)) {
+			*errorString = "Unsupported shader language for stereo";
 			return false;
 		}
 	}
@@ -375,6 +375,11 @@ bool GenerateVertexShader(const VShaderID &id, char *buffer, const ShaderLanguag
 		WRITE(p, "uniform vec4 u_xywh;\n");
 		WRITE(p, "uniform float u_NaN;\n");
 		*uniformMask |= DIRTY_FRAMEBUFFER_DIM;
+
+		if (glStereo) {
+			WRITE(p, "uniform int u_stereoEye;\nuniform vec4 u_stereo;\nuniform vec4 u_stereoUI;\n");
+			*uniformMask |= DIRTY_STEREO;
+		}
 
 		// highp to match the fragment shader's (see there).
 		WRITE(p, "uniform highp vec2 u_minZmaxZ;\n");

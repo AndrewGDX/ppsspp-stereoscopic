@@ -95,7 +95,7 @@ void ComputeVertexShaderID(VShaderID *id_out, u32 vertType, bool useHWTransform,
 	id.SetBit(VS_BIT_VERTEX_RANGE_CULLING, vertexRangeCulling);
 
 	// VR's eyes only differ in their views, but stereoscopy shifts through mode draws too.
-	if (gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO) && (!isModeThrough || gstate_c.Use(GPU_USE_STEREOSCOPY))) {
+	if (gstate_c.Use(GPU_USE_STEREOSCOPY) || (gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO) && !isModeThrough)) {
 		id.SetBit(VS_BIT_SIMPLE_STEREO);
 	}
 

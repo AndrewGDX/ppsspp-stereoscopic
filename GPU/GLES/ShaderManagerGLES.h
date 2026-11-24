@@ -69,6 +69,8 @@ public:
 	int u_texmtx;
 	int u_world;
 	int u_mipBias;
+	int u_stereo;
+	int u_stereoUI;
 	int u_texLodBias;
 	int u_NaN;
 

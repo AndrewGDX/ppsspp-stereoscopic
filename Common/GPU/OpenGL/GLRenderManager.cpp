@@ -202,6 +202,7 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 	step->render.color = color;
 	step->render.depth = depth;
 	step->render.stencil = stencil;
+	step->render.numRebinds = 0;
 	step->tag = tag;
 	steps_.push_back(step);
 
@@ -234,6 +235,28 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 		if (color == GLRRenderPassAction::KEEP || depth == GLRRenderPassAction::KEEP || stencil == GLRRenderPassAction::KEEP) {
 			step->dependencies.insert(fb);
 		}
+		if (fb->rightEye) {
+			// Each eye runs the pass on its own, the right after the left has changed what's bound. Callers
+			// count on the program and textures staying bound from earlier passes, so bind them for both.
+			if (boundProgram_) {
+				GLRRenderData bind(GLRRenderCommand::BINDPROGRAM);
+				bind.program.program = boundProgram_;
+				step->commands.push_back(bind);
+			}
+			for (int slot = 0; slot < MAX_GL_TEXTURE_SLOTS; slot++) {
+				if (boundFramebufferTextures_[slot].framebuffer) {
+					GLRRenderData bind(GLRRenderCommand::BIND_FB_TEXTURE);
+					bind.bind_fb_texture = boundFramebufferTextures_[slot];
+					step->commands.push_back(bind);
+				} else if (boundTextures_[slot]) {
+					GLRRenderData bind(GLRRenderCommand::BINDTEXTURE);
+					bind.texture.slot = slot;
+					bind.texture.texture = boundTextures_[slot];
+					step->commands.push_back(bind);
+				}
+			}
+			step->render.numRebinds = (int)step->commands.size() - (clearMask ? 1 : 0);
+		}
 	}
 
 	if (invalidationCallback_) {
@@ -242,13 +265,13 @@ void GLRenderManager::BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRende
 }
 
 // aspectBit: GL_COLOR_BUFFER_BIT etc
-void GLRenderManager::BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit) {
+void GLRenderManager::BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit, int layer) {
 	_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == GLRStepType::RENDER);
 	_dbg_assert_(binding < MAX_GL_TEXTURE_SLOTS);
 	GLRRenderData data{ GLRRenderCommand::BIND_FB_TEXTURE };
-	data.bind_fb_texture.slot = binding;
-	data.bind_fb_texture.framebuffer = fb;
-	data.bind_fb_texture.aspect = aspectBit;
+	data.bind_fb_texture = { fb, binding, aspectBit, layer };
+	boundFramebufferTextures_[binding] = data.bind_fb_texture;
+	boundTextures_[binding] = nullptr;
 	curRenderStep_->commands.push_back(data);
 	curRenderStep_->dependencies.insert(fb);
 }

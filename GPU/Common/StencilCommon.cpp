@@ -292,7 +292,9 @@ void FramebufferManagerCommon::WriteStencilFromFramebufferAlpha(VirtualFramebuff
 	Viewport viewport = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
 	draw_->SetViewport(viewport);
 	draw_->SetScissorRect(0, 0, w, h);
-	draw_->BindFramebufferAsTexture(copy, TEX_SLOT_PSP_TEXTURE, Aspect::COLOR_BIT, 0);
+	// The stencil shader samples a 2D texture. On OpenGL all layers means each eye's own.
+	const int layer = draw_->GetDeviceCaps().stereoPassReplaySupported ? ALL_LAYERS : 0;
+	draw_->BindFramebufferAsTexture(copy, TEX_SLOT_PSP_TEXTURE, Aspect::COLOR_BIT, layer);
 	draw_->BindSamplerStates(TEX_SLOT_PSP_TEXTURE, 1, &stencilWriteSampler_);
 	draw_->BindPipeline(stencilWritePipeline_);
 	DrawStencilWritePasses(dst->fb_format, values, 0xFF, useExportShader);

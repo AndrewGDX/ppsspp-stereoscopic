@@ -139,6 +139,7 @@ uint32_t PackDepalBits(bool pixelMapped);
 void DirtyDepalForDraw(bool pixelMapped);
 // Update the stereo uniforms for the draw about to be made.
 void UpdateStereoDrawClass();
+void UpdateStereoUniforms(UB_VS_FS_Base *ub);
 
 void UpdateFogCoef(const GEState &state, float fogCoef[2]);
 

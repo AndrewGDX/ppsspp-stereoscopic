@@ -499,7 +499,7 @@ enum : u32 {
 	// VR flags (reserved or in-use)
 	GPU_USE_VIRTUAL_REALITY = FLAG_BIT(29),
 	GPU_USE_SINGLE_PASS_STEREO = FLAG_BIT(30),
-	GPU_USE_STEREOSCOPY = FLAG_BIT(31),  // Stereoscopic 3D on a normal display, see StereoscopyEnabled(). Implies GPU_USE_SINGLE_PASS_STEREO.
+	GPU_USE_STEREOSCOPY = FLAG_BIT(31),  // Stereoscopic 3D on a normal display, see StereoscopyEnabled().
 };
 
 enum class StereoDrawClass : uint8_t {

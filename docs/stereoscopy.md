@@ -5,20 +5,22 @@ bottom for a 3D TV, projector or headset that takes such a signal. Settings > Gr
 per game. Separate from VR (`Common/VR`), which shares the single-pass stereo rendering but takes its
 views from the headset.
 
-Works with Vulkan, Metal and D3D11 (D3D11.3, `VPAndRTArrayIndexFromAnyShaderFeedingRasterizer`). Not
-with OpenGL, software rendering, or skip buffer effects.
+Works with OpenGL, OpenGL ES, Vulkan, Metal and D3D11 (D3D11.3,
+`VPAndRTArrayIndexFromAnyShaderFeedingRasterizer`). Requires buffered hardware rendering.
 
 ## Rendering
 
-`StereoscopyEnabled()` (`PresentationCommon.cpp`) sets `GPU_USE_STEREOSCOPY`, `GPU_USE_SINGLE_PASS_STEREO`
-and `GPU_USE_FRAMEBUFFER_ARRAYS`. Every framebuffer then has two layers (`GetFramebufferLayers()`), a
-layer per eye, and every draw renders both in one pass:
+`StereoscopyEnabled()` (`PresentationCommon.cpp`) enables a framebuffer layer per eye
+(`GetFramebufferLayers()`). Vulkan, Metal and D3D11 set `GPU_USE_SINGLE_PASS_STEREO` and
+`GPU_USE_FRAMEBUFFER_ARRAYS` and submit one draw for both layers. OpenGL gives each eye a 2D framebuffer and
+runs each render pass once per eye (see [OpenGL](#opengl)).
 
 | Backend | How a draw reaches both layers | The eye in the shaders |
 |---|---|---|
 | Vulkan | Multiview render passes | `gl_ViewIndex` |
 | Metal | An instance per layer, the vertex shader writes `[[render_target_array_index]]` (SPIRV-Cross's multiview emulation) | `gl_ViewIndex` (from the instance, `METAL_VIEW_MASK_INDEX`) |
 | D3D11 | An instance per layer, the vertex shader writes `SV_RenderTargetArrayIndex` | `SV_InstanceID`, passed to the pixel shader in a varying |
+| OpenGL / OpenGL ES | The queue runner runs the render pass again for the right eye's framebuffer | `u_stereoEye`, a uniform set when the program is bound |
 
 Shaders that sample a framebuffer sample their eye's layer (`FS_BIT_STEREO`, `ShaderWriterFlags::FS_AUTO_STEREO`).
 Copies copy both layers. CPU readbacks read the left eye.
@@ -26,6 +28,26 @@ Copies copy both layers. CPU readbacks read the left eye.
 On Metal and D3D11, a thin3d vertex shader gets a second version that picks the layer, used for a layered
 target or when the fragment shader reads the eye. On D3D11, a texture slot gets a 2D or array view to match
 what the pixel shader declares, and binding one layer of a stereo framebuffer for a 2D sampler copies it out.
+
+### OpenGL
+
+GL has no common way for one draw to reach both eyes. `OVR_multiview2` is GLES only (and not on every
+GPU), and a vertex shader can only pick the layer with `ARB_shader_viewport_layer_array` or
+`AMD_vertex_shader_layer`, which macOS's GL 4.1 doesn't have. So `GLQueueRunner::PerformRenderPass` runs a
+stereo pass's commands twice, into the left eye's framebuffer and then the right's, and the target changes
+once per eye. Changing it for every draw made a frame 3.6 times as slow on a Radeon Pro Vega 20 (the driver
+ends and starts a pass on each change), and tiled GPUs would store and load the whole target each time.
+
+The right eye's run has to start from the state the left eye's did. GL keeps state from pass to pass, and
+the callers count on that: `TextureCacheGLES` doesn't bind a texture again, and `ShaderManagerGLES` keeps its
+program and only sets the uniforms that changed. So:
+
+- The render manager starts a stereo pass by binding the program and textures that are bound
+  (`boundProgram_`, `boundTextures_`).
+- Once there's been a stereo pass, the queue runner saves every uniform it sets in its program
+  (`GLRProgram::uniformValues`), and the left eye's run notes what it overwrites, for the right eye's run to
+  set back. Setting every uniform again in each pass did the same, and cost about 15% in Peace Walker.
+- A framebuffer bound with all layers reads the eye's own texture, and layer 1 the right eye's.
 
 Turning stereoscopy on or off recreates the framebuffers (`FramebufferManagerCommon::NotifyLayersChanged`),
 so their contents are lost for a frame. The other settings are uniforms and take effect right away.
@@ -129,15 +151,20 @@ keeps its default in a `controls.ini` from before it existed (`KeepsDefaultIfMis
 
 ## Performance
 
-Each draw is one instanced draw call for both eyes, so the CPU cost is small: about 3% more per frame on a
-Radeon Pro Vega 20 (Tekken 6, 4x). The GPU does all the work twice, every pixel of every layer, so GPU time
-doubles (1.2 to 2.0 ms there). That's what limits it on integrated GPUs, which also share their power budget
+On the single-pass backends each draw is one draw call for both eyes, so the CPU cost is small: about 3%
+more per frame on a Radeon Pro Vega 20 (Tekken 6, 4x). The GPU does all the work twice, every pixel of every
+layer, so GPU time doubles (1.2 to 2.0 ms there). That's what limits it on integrated GPUs, which also share their power budget
 with the CPU: on the Intel UHD 630 of the same Mac, GPU time went from 6.4 to 10.6 ms a frame, and the
 emulator thread slowed down too, by 60% and more, doing the same work. With Buffer graphics commands set to
 No buffer, the CPU and the GPU take turns (on Metal there's no render thread then, and each frame waits for
 the GPU), so a frame costs their sum, and with vsync, one that misses 16.7 ms can wait for the next
 vblank, which halves the frame rate. Buffering one or two frames lets them overlap. A lower render
 resolution cuts the GPU time the most.
+
+OpenGL makes every draw twice, and the GL driver's time per draw is what its render thread spends most of
+(`glDrawRangeElements`). On the Vega 20 at 4x, running 9 emulated seconds unthrottled took 3.4 seconds instead
+of 3.1 in Tekken 6. Peace Walker, with more draws and passes, took about 40% longer (in runs alternated with
+mono on a busy machine).
 
 ## Testing
 
@@ -147,7 +174,10 @@ resolution cuts the GPU time the most.
 - The right eye and the layout need the real app: a backbuffer screenshot through the WebSocket debugger
   (`wsdbg`'s `:screenshot`). Use a memstick of its own (`--memstick`), as the app saves appended settings.
   `--appendconfig` skips `[PostShaderList]`, so for post shaders, write that memstick's `ppsspp.ini` instead.
-- `ShaderGenerators` has a stereoscopy pass (Vulkan GLSL, and HLSL on Windows).
+- On OpenGL, the right eye of every frame dump can be checked with a local change that makes
+  `GLQueueRunner::PerformReadback` read `rightEye`: with separation 0 it matches mono exactly. Without the
+  uniform undo above, 3 of the 43 differ (OutRun's water, and two Valkyria Chronicles scenes).
+- `ShaderGenerators` has a stereoscopy pass (OpenGL and Vulkan GLSL, and HLSL on Windows).
 - The debugger's screenshot is taken before the UI is drawn, so it doesn't show the settings overlay.
   `ScheduleScreenshot` with `ScreenshotType::Output` does, as it reads the backbuffer at the end of the frame.
   Feeding `NativeKey`/`NativeAxis` from a local hook in `EmuScreen::update` drives the hotkey through the mapper.

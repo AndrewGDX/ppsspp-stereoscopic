@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <mutex>
+#include <memory>
 #include <queue>
 #include <condition_variable>
 
@@ -78,6 +79,7 @@ public:
 	int height;
 	GLuint colorDepth = 0;
 	bool z_stencil_;
+	std::unique_ptr<GLRFramebuffer> rightEye;
 
 private:
 	std::string tag_;
@@ -111,6 +113,7 @@ struct GLRProgramFlags {
 	bool useClipDistance0 : 1;
 	bool useClipDistance1 : 1;
 	bool useClipDistance2 : 1;
+	bool useStereoEye : 1;
 };
 
 // Unless you manage lifetimes in some smart way,
@@ -159,6 +162,16 @@ public:
 
 	GLRProgramLocData *locData_;
 	bool use_clip_distance[8]{};
+	GLint stereoEyeLoc = -1;
+	int stereoEye = 0;  // What u_stereoEye is set to.
+
+	// With stereoscopy, what the queue runner last set each uniform to (see GLQueueRunner::SaveUniform).
+	struct UniformValue {
+		GLint loc;
+		uint32_t stereoPass;  // The stereo pass that saved the value before it for the right eye.
+		GLRRenderData data;
+	};
+	std::vector<UniformValue> uniformValues;
 
 	struct UniformInfo {
 		int loc_;
@@ -310,14 +323,21 @@ public:
 		return step.create_shader.shader;
 	}
 
-	GLRFramebuffer *CreateFramebuffer(int width, int height, bool z_stencil, const char *tag) {
+	GLRFramebuffer *CreateFramebuffer(int width, int height, int layers, bool z_stencil, const char *tag) {
 		_dbg_assert_(width > 0 && height > 0 && tag != nullptr);
 
 		std::lock_guard<std::mutex> lock(initStepsMutex_);
-		GLRInitStep &step = initSteps_.push_uninitialized();
-		step.stepType = GLRInitStepType::CREATE_FRAMEBUFFER;
-		step.create_framebuffer.framebuffer = new GLRFramebuffer(caps_, width, height, z_stencil, tag);
-		return step.create_framebuffer.framebuffer;
+		auto create = [&]() {
+			GLRInitStep &step = initSteps_.push_uninitialized();
+			step.stepType = GLRInitStepType::CREATE_FRAMEBUFFER;
+			step.create_framebuffer.framebuffer = new GLRFramebuffer(caps_, width, height, z_stencil, tag);
+			return step.create_framebuffer.framebuffer;
+		};
+		GLRFramebuffer *fb = create();
+		if (layers > 1) {
+			fb->rightEye.reset(create());
+		}
+		return fb;
 	}
 
 	// Can't replace uniform initializers with direct calls to SetUniform() etc because there might
@@ -332,6 +352,10 @@ public:
 		step.create_program.program = new GLRProgram();
 		step.create_program.program->semantics_ = semantics;
 		step.create_program.program->queries_ = queries;
+		if (flags.useStereoEye) {
+			GLRProgram *program = step.create_program.program;
+			program->queries_.push_back({ &program->stereoEyeLoc, "u_stereoEye", true });
+		}
 		step.create_program.program->initialize_ = initializers;
 		step.create_program.program->locData_ = locData;
 		step.create_program.program->use_clip_distance[0] = flags.useClipDistance0;
@@ -380,6 +404,9 @@ public:
 	}
 	void DeleteProgram(GLRProgram *program) {
 		_dbg_assert_(program != nullptr);
+		if (boundProgram_ == program) {
+			boundProgram_ = nullptr;
+		}
 		deleter_.programs.push_back(program);
 	}
 	void DeleteBuffer(GLRBuffer *buffer) {
@@ -388,6 +415,7 @@ public:
 	}
 	void DeleteTexture(GLRTexture *texture) {
 		_dbg_assert_(texture != nullptr);
+		ForgetBoundTexture(texture);
 		deleter_.textures.push_back(texture);
 	}
 	void DeleteInputLayout(GLRInputLayout *inputLayout) {
@@ -396,6 +424,15 @@ public:
 	}
 	void DeleteFramebuffer(GLRFramebuffer *framebuffer) {
 		_dbg_assert_(framebuffer != nullptr);
+		for (GLRFramebuffer *fb = framebuffer; fb; fb = fb->rightEye.get()) {
+			ForgetBoundTexture(&fb->color_texture);
+			ForgetBoundTexture(&fb->z_stencil_texture);
+		}
+		for (auto &binding : boundFramebufferTextures_) {
+			if (binding.framebuffer == framebuffer) {
+				binding.framebuffer = nullptr;
+			}
+		}
 		deleter_.framebuffers.push_back(framebuffer);
 	}
 	void DeletePushBuffer(GLPushBuffer *pushbuffer) {
@@ -424,7 +461,7 @@ public:
 	void BindFramebufferAsRenderTarget(GLRFramebuffer *fb, GLRRenderPassAction color, GLRRenderPassAction depth, GLRRenderPassAction stencil, uint32_t clearColor, float clearDepth, uint8_t clearStencil, const char *tag);
 
 	// Binds a framebuffer as a texture, for the following draws.
-	void BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit);
+	void BindFramebufferAsTexture(GLRFramebuffer *fb, int binding, int aspectBit, int layer = 0);
 
 	bool CopyFramebufferToMemory(GLRFramebuffer *src, int aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, Draw::ReadbackMode mode, const char *tag);
 	void CopyImageToMemorySync(GLRTexture *texture, int mipLevel, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, const char *tag);
@@ -513,6 +550,8 @@ public:
 		}
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == GLRStepType::RENDER);
 		_dbg_assert_(slot < MAX_GL_TEXTURE_SLOTS);
+		boundTextures_[slot] = tex;
+		boundFramebufferTextures_[slot].framebuffer = nullptr;
 		GLRRenderData &data = curRenderStep_->commands.push_uninitialized();
 		data.cmd = GLRRenderCommand::BINDTEXTURE;
 		data.texture.slot = slot;
@@ -525,6 +564,7 @@ public:
 		data.cmd = GLRRenderCommand::BINDPROGRAM;
 		_dbg_assert_(program != nullptr);
 		data.program.program = program;
+		boundProgram_ = program;
 #ifdef _DEBUG
 		curProgram_ = program;
 #endif
@@ -892,12 +932,25 @@ private:
 		frameData_[frame].activePushBuffers.insert(buffer);
 	}
 
+	void ForgetBoundTexture(const GLRTexture *texture) {
+		for (auto &tex : boundTextures_) {
+			if (tex == texture) {
+				tex = nullptr;
+			}
+		}
+	}
+
 	GLFrameData frameData_[MAX_INFLIGHT_FRAMES];
 
 	// Submission time state
 	bool insideFrame_ = false;
 
 	GLRStep *curRenderStep_ = nullptr;
+	// What GL has bound across passes, recorded again at the start of a stereo pass (see
+	// GLQueueRunner::PerformRenderPass). A slot has a texture or a framebuffer, or neither.
+	GLRProgram *boundProgram_ = nullptr;
+	GLRTexture *boundTextures_[MAX_GL_TEXTURE_SLOTS]{};
+	GLRFramebufferTextureBinding boundFramebufferTextures_[MAX_GL_TEXTURE_SLOTS]{};
 	std::vector<GLRStep *> steps_;
 	// Guards initSteps_. Recorded into from the emu thread, but also from the loader thread during
 	// boot (InitGPU runs there, and GL has to record device object creation rather than just doing

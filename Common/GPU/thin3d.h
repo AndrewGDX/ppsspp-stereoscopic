@@ -652,6 +652,7 @@ struct DeviceCaps {
 	bool textureDepthSupported;
 	bool blendMinMaxSupported;
 	bool multiViewSupported;
+	bool stereoPassReplaySupported;  // A 2D framebuffer per eye, and each render pass runs once per eye.
 	bool isTilingGPU;  // This means that it benefits from correct store-ops, msaa without backing memory, etc.
 	bool sampleRateShadingSupported;
 	bool setMaxFrameLatencySupported;

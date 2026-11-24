@@ -755,7 +755,8 @@ Draw::ShaderModule *PresentationCommon::CompileShaderModule(ShaderStage stage, S
 }
 
 bool StereoscopySupported(Draw::DrawContext *draw) {
-	return draw && draw->GetDeviceCaps().multiViewSupported && !g_Config.bSoftwareRendering && !IsVREnabled() && !g_Config.bForceVR;
+	return draw && (draw->GetDeviceCaps().multiViewSupported || draw->GetDeviceCaps().stereoPassReplaySupported) &&
+		!g_Config.bSoftwareRendering && !IsVREnabled() && !g_Config.bForceVR;
 }
 
 bool StereoscopyEnabled(Draw::DrawContext *draw) {

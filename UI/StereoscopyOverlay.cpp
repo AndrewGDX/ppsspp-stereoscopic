@@ -681,7 +681,7 @@ void StereoscopyOverlay::DrawHints(UIContext &dc, const Bounds &bounds) {
 		} else if (StereoscopySupported(draw_)) {
 			reason = gr->T("StereoscopySkipBuffer Tip", "Not available with Skip buffer effects");
 		} else {
-			reason = gr->T("StereoscopyUnsupported Tip", "Needs the Vulkan, Metal or Direct3D 11 backend");
+			reason = gr->T("StereoscopyUnsupported Tip", "Unavailable with the current graphics backend or device");
 		}
 		dc.DrawTextRectSqueeze(theme.uiFontSmall, reason, bounds, color, ALIGN_CENTER);
 		return;

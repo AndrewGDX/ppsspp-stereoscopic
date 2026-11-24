@@ -159,6 +159,10 @@ LinkedShader::LinkedShader(GLRenderManager *render, VShaderID VSID, Shader *vs, 
 	queries.push_back({ &u_depal_mask_shift_off_fmt, "u_depal_mask_shift_off_fmt" });
 	queries.push_back({ &u_mipBias, "u_mipBias" });
 	queries.push_back({ &u_texLodBias, "u_texLodBias" });
+	if (VSID.Bit(VS_BIT_SIMPLE_STEREO)) {
+		queries.push_back({ &u_stereo, "u_stereo" });
+		queries.push_back({ &u_stereoUI, "u_stereoUI" });
+	}
 
 	attrMask = vs->GetAttrMask();
 	availableUniforms = vs->GetUniformMask() | fs->GetUniformMask();
@@ -172,6 +176,7 @@ LinkedShader::LinkedShader(GLRenderManager *render, VShaderID VSID, Shader *vs, 
 
 	GLRProgramFlags flags{};
 	flags.supportDualSource = gstate_c.Use(GPU_USE_DUALSOURCE_BLEND);
+	flags.useStereoEye = VSID.Bit(VS_BIT_SIMPLE_STEREO);
 	// Must match the planes GenerateVertexShader writes: min/max Z in 0 and 1, the near plane in 2.
 	if (gstate_c.Use(GPU_USE_CLIP_DISTANCE)) {
 		if (!VSID.Bit(VS_BIT_IS_THROUGH)) {
@@ -300,6 +305,14 @@ void LinkedShader::UpdateUniforms(const ShaderID &vsid, const ShaderLanguageDesc
 
 	if (dirty & DIRTY_DEPAL) {
 		render_->SetUniformUI1(&u_depal_mask_shift_off_fmt, PackDepalBits(pixelMapped));
+	}
+	if (dirty & DIRTY_STEREO) {
+		UB_VS_FS_Base ub;
+		UpdateStereoUniforms(&ub);
+		const float stereo[4] = { ub.stereoEyeScale[0], ub.stereoEyeScale[1], ub.stereoConvergence, ub.stereoForceUI };
+		const float stereoUI[4] = { ub.stereoUIDepth, ub.stereoUIThresholdW, ub.stereoUVShift, 0.0f };
+		render_->SetUniformF(&u_stereo, 4, stereo);
+		render_->SetUniformF(&u_stereoUI, 4, stereoUI);
 	}
 
 	// Update any dirty uniforms before we draw
@@ -606,6 +619,7 @@ Shader *ShaderManagerGLES::ApplyVertexShader(bool useHWTransform, u32 vertexType
 
 LinkedShader *ShaderManagerGLES::ApplyFragmentShader(VShaderID VSID, Shader *vs, const ComputedPipelineState &pipelineState, ClipInfoFlags clipInfoFlags, bool pixelMapped) {
 	DirtyDepalForDraw(pixelMapped);
+	UpdateStereoDrawClass();
 	uint64_t dirty = gstate_c.GetDirtyUniforms();
 	if (dirty) {
 		if (lastShader_)

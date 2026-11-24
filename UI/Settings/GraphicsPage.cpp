@@ -323,7 +323,7 @@ void BuildGraphicsSettings(SettingsPage *page) {
 			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 		});
 		if (!StereoscopySupported(draw) && !g_Config.bSoftwareRendering) {
-			mode.Hint({I18NCat::GRAPHICS, "StereoscopyUnsupported Tip", "Needs the Vulkan, Metal or Direct3D 11 backend"});
+			mode.Hint({I18NCat::GRAPHICS, "StereoscopyUnsupported Tip", "Unavailable with the current graphics backend or device"});
 		}
 		page->Setting(&g_Config.iStereoscopyDominantEye).EnabledFunc(stereoscopyOn);
 		page->Setting(&g_Config.bStereoscopySwapEyes).EnabledFunc(stereoscopyOn);

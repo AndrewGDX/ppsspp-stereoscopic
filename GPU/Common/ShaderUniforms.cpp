@@ -75,8 +75,6 @@ void CalcTexClamp(float texClamp[4], float texClampOffset[2]) {
 	texClampOffset[1] = gstate_c.curTextureYOffset * invH;
 }
 
-static void UpdateStereoUniforms(UB_VS_FS_Base *ub);
-
 void BaseUpdateUniforms(UB_VS_FS_Base *ub, uint64_t dirtyUniforms, bool useBufferedRendering, bool pixelMapped) {
 	if (dirtyUniforms & DIRTY_TEXENV) {
 		Uint8x3ToFloat3(ub->texEnvColor, gstate.texenvcolor);
@@ -427,7 +425,7 @@ void UpdateStereoDrawClass() {
 	}
 }
 
-static void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
+void UpdateStereoUniforms(UB_VS_FS_Base *ub) {
 	// The eyes move apart by the separation, which in clip space is the share of the target's half width.
 	// The dominant eye stays put, and the other moves all of it.
 	const float separation = g_Config.fStereoscopySeparation * 0.001f;

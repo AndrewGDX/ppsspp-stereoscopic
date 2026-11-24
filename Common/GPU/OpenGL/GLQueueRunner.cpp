@@ -700,7 +700,7 @@ void GLQueueRunner::RunSteps(const std::vector<GLRStep *> &steps, GLFrameData &f
 	for (auto &step : steps) {
 		if (step->stepType == GLRStepType::RENDER) {
 			// Skip empty render steps.
-			if (step->commands.empty()) {
+			if (step->commands.size() == (size_t)step->render.numRebinds) {
 				step->stepType = GLRStepType::RENDER_SKIP;
 				continue;
 			}
@@ -820,10 +820,88 @@ static void EnableDisableVertexArrays(uint32_t prevAttr, uint32_t newAttr) {
 	}
 }
 
+static void ApplyUniform(GLint loc, const GLRRenderData &c) {
+	switch (c.cmd) {
+	case GLRRenderCommand::UNIFORM4F:
+		_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
+		switch (c.uniform4.count) {
+		case 1: glUniform1f(loc, c.uniform4.v[0]); break;
+		case 2: glUniform2fv(loc, 1, c.uniform4.v); break;
+		case 3: glUniform3fv(loc, 1, c.uniform4.v); break;
+		case 4: glUniform4fv(loc, 1, c.uniform4.v); break;
+		}
+		break;
+	case GLRRenderCommand::UNIFORM4UI:
+		_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
+		switch (c.uniform4.count) {
+		case 1: glUniform1uiv(loc, 1, (GLuint *)c.uniform4.v); break;
+		case 2: glUniform2uiv(loc, 1, (GLuint *)c.uniform4.v); break;
+		case 3: glUniform3uiv(loc, 1, (GLuint *)c.uniform4.v); break;
+		case 4: glUniform4uiv(loc, 1, (GLuint *)c.uniform4.v); break;
+		}
+		break;
+	case GLRRenderCommand::UNIFORM4I:
+		_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
+		switch (c.uniform4.count) {
+		case 1: glUniform1iv(loc, 1, (GLint *)c.uniform4.v); break;
+		case 2: glUniform2iv(loc, 1, (GLint *)c.uniform4.v); break;
+		case 3: glUniform3iv(loc, 1, (GLint *)c.uniform4.v); break;
+		case 4: glUniform4iv(loc, 1, (GLint *)c.uniform4.v); break;
+		}
+		break;
+	case GLRRenderCommand::UNIFORMMATRIX:
+		glUniformMatrix4fv(loc, 1, false, c.uniformMatrix4.m);
+		break;
+	default:
+		_dbg_assert_(false);
+		break;
+	}
+}
+
+void GLQueueRunner::SaveUniform(GLRProgram *program, GLint loc, const GLRRenderData &c, bool forRightEye) {
+	for (auto &value : program->uniformValues) {
+		if (value.loc == loc) {
+			if (forRightEye && value.stereoPass != stereoPass_) {
+				uniformUndo_.push_back({ program, loc, value.data });
+				value.stereoPass = stereoPass_;
+			}
+			value.data = c;
+			return;
+		}
+	}
+	// Not set before, so no draw in the pass can have used an earlier value.
+	program->uniformValues.push_back({ loc, stereoPass_, c });
+}
+
 void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last, GLQueueProfileContext &profile) {
+	GLRFramebuffer *fb = step.render.framebuffer;
+	if (fb && fb->rightEye) {
+		// Stereoscopy: the whole pass runs once per eye, so the target changes once per eye rather than for
+		// every draw (which tiled GPUs pay for with a store and load of the target). The render manager starts
+		// a stereo pass by binding its program and textures, so both eyes start the same.
+		saveUniforms_ = true;
+		stereoPass_++;
+		uniformUndo_.clear();
+		PerformRenderPassEye(step, fb, 0, first, false, profile);
+		// The uniforms too: set back what the left eye's run changed.
+		GLRProgram *program = nullptr;
+		for (const UniformUndo &undo : uniformUndo_) {
+			if (undo.program != program) {
+				program = undo.program;
+				glUseProgram(program->program);
+			}
+			ApplyUniform(undo.loc, undo.data);
+		}
+		PerformRenderPassEye(step, fb->rightEye.get(), 1, false, last, profile);
+	} else {
+		PerformRenderPassEye(step, fb, 0, first, last, profile);
+	}
+}
+
+void GLQueueRunner::PerformRenderPassEye(const GLRStep &step, GLRFramebuffer *fb, int eye, bool first, bool last, GLQueueProfileContext &profile) {
 	CHECK_GL_ERROR_IF_DEBUG();
 
-	PerformBindFramebufferAsRenderTarget(step);
+	PerformBindFramebufferAsRenderTarget(fb);
 
 	if (first) {
 		glDisable(GL_DEPTH_TEST);
@@ -845,6 +923,7 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 
 	GLRProgram *curProgram = nullptr;
 	int activeSlot = -1;
+	const bool saveForRightEye = eye == 0 && fb && fb->rightEye;
 
 	// State filtering tracking.
 	int attrMask = 0;
@@ -1096,13 +1175,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 				loc = curProgram->GetUniformLoc(c.uniform4.name);
 			}
 			if (loc >= 0) {
-				_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
-				switch (c.uniform4.count) {
-				case 1: glUniform1f(loc, c.uniform4.v[0]); break;
-				case 2: glUniform2fv(loc, 1, c.uniform4.v); break;
-				case 3: glUniform3fv(loc, 1, c.uniform4.v); break;
-				case 4: glUniform4fv(loc, 1, c.uniform4.v); break;
+				if (saveUniforms_) {
+					SaveUniform(curProgram, loc, c, saveForRightEye);
 				}
+				ApplyUniform(loc, c);
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
@@ -1115,13 +1191,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 				loc = curProgram->GetUniformLoc(c.uniform4.name);
 			}
 			if (loc >= 0) {
-				_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
-				switch (c.uniform4.count) {
-				case 1: glUniform1uiv(loc, 1, (GLuint *)c.uniform4.v); break;
-				case 2: glUniform2uiv(loc, 1, (GLuint *)c.uniform4.v); break;
-				case 3: glUniform3uiv(loc, 1, (GLuint *)c.uniform4.v); break;
-				case 4: glUniform4uiv(loc, 1, (GLuint *)c.uniform4.v); break;
+				if (saveUniforms_) {
+					SaveUniform(curProgram, loc, c, saveForRightEye);
 				}
+				ApplyUniform(loc, c);
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
@@ -1134,13 +1207,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 				loc = curProgram->GetUniformLoc(c.uniform4.name);
 			}
 			if (loc >= 0) {
-				_dbg_assert_(c.uniform4.count >=1 && c.uniform4.count <=4);
-				switch (c.uniform4.count) {
-				case 1: glUniform1iv(loc, 1, (GLint *)c.uniform4.v); break;
-				case 2: glUniform2iv(loc, 1, (GLint *)c.uniform4.v); break;
-				case 3: glUniform3iv(loc, 1, (GLint *)c.uniform4.v); break;
-				case 4: glUniform4iv(loc, 1, (GLint *)c.uniform4.v); break;
+				if (saveUniforms_) {
+					SaveUniform(curProgram, loc, c, saveForRightEye);
 				}
+				ApplyUniform(loc, c);
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
@@ -1153,7 +1223,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 				loc = curProgram->GetUniformLoc(c.uniformMatrix4.name);
 			}
 			if (loc >= 0) {
-				glUniformMatrix4fv(loc, 1, false, c.uniformMatrix4.m);
+				if (saveUniforms_) {
+					SaveUniform(curProgram, loc, c, saveForRightEye);
+				}
+				ApplyUniform(loc, c);
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
 			break;
@@ -1184,24 +1257,30 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 				glActiveTexture(GL_TEXTURE0 + slot);
 				activeSlot = slot;
 			}
+			GLRFramebuffer *framebuffer = c.bind_fb_texture.framebuffer;
+			// Layer 1 is the right eye, and so are all layers in the right eye's run of the pass.
+			const int layer = c.bind_fb_texture.layer;
+			if (framebuffer->rightEye && (layer == 1 || (layer == Draw::ALL_LAYERS && eye == 1))) {
+				framebuffer = framebuffer->rightEye.get();
+			}
 			if (c.bind_fb_texture.aspect == GL_COLOR_BUFFER_BIT) {
-				if (curTex[slot] != &c.bind_fb_texture.framebuffer->color_texture) {
-					glBindTexture(GL_TEXTURE_2D, c.bind_fb_texture.framebuffer->color_texture.texture);
-					curTex[slot] = &c.bind_fb_texture.framebuffer->color_texture;
+				if (curTex[slot] != &framebuffer->color_texture) {
+					glBindTexture(GL_TEXTURE_2D, framebuffer->color_texture.texture);
+					curTex[slot] = &framebuffer->color_texture;
 				}
 			} else if (c.bind_fb_texture.aspect == GL_DEPTH_BUFFER_BIT) {
-				if (curTex[slot] != &c.bind_fb_texture.framebuffer->z_stencil_texture) {
-					glBindTexture(GL_TEXTURE_2D, c.bind_fb_texture.framebuffer->z_stencil_texture.texture);
-					curTex[slot] = &c.bind_fb_texture.framebuffer->z_stencil_texture;
+				if (curTex[slot] != &framebuffer->z_stencil_texture) {
+					glBindTexture(GL_TEXTURE_2D, framebuffer->z_stencil_texture.texture);
+					curTex[slot] = &framebuffer->z_stencil_texture;
 				}
 				// This should be uncommon, so always set the mode (where it exists).
 				if (stencilTexturing) {
 					glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
 				}
 			} else if (c.bind_fb_texture.aspect == GL_STENCIL_BUFFER_BIT) {
-				if (curTex[slot] != &c.bind_fb_texture.framebuffer->z_stencil_texture) {
-					glBindTexture(GL_TEXTURE_2D, c.bind_fb_texture.framebuffer->z_stencil_texture.texture);
-					curTex[slot] = &c.bind_fb_texture.framebuffer->z_stencil_texture;
+				if (curTex[slot] != &framebuffer->z_stencil_texture) {
+					glBindTexture(GL_TEXTURE_2D, framebuffer->z_stencil_texture.texture);
+					curTex[slot] = &framebuffer->z_stencil_texture;
 				}
 				// This should be uncommon, so always set the mode (where it exists).
 				if (stencilTexturing) {
@@ -1228,6 +1307,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 					else
 						glDisable(GL_CLIP_DISTANCE0 + (GLenum)i);
 					clipDistanceEnabled[i] = c.program.program->use_clip_distance[i];
+				}
+				if (curProgram->stereoEyeLoc >= 0 && curProgram->stereoEye != eye) {
+					glUniform1i(curProgram->stereoEyeLoc, eye);
+					curProgram->stereoEye = eye;
 				}
 			}
 			CHECK_GL_ERROR_IF_DEBUG();
@@ -1364,6 +1447,10 @@ void GLQueueRunner::PerformRenderPass(const GLRStep &step, bool first, bool last
 		}
 		case GLRRenderCommand::TEXTURE_SUBIMAGE:
 		{
+			if (eye != 0) {
+				// Uploaded (and the data freed) with the first eye.
+				break;
+			}
 			GLint slot = c.texture_subimage.slot;
 			if (slot != activeSlot) {
 				glActiveTexture(GL_TEXTURE0 + slot);
@@ -1670,16 +1757,16 @@ void GLQueueRunner::PerformReadbackImage(const GLRStep &pass) {
 	CHECK_GL_ERROR_IF_DEBUG();
 }
 
-void GLQueueRunner::PerformBindFramebufferAsRenderTarget(const GLRStep &pass) {
-	if (pass.render.framebuffer) {
-		curFBWidth_ = pass.render.framebuffer->width;
-		curFBHeight_ = pass.render.framebuffer->height;
+void GLQueueRunner::PerformBindFramebufferAsRenderTarget(GLRFramebuffer *fb) {
+	if (fb) {
+		curFBWidth_ = fb->width;
+		curFBHeight_ = fb->height;
 	} else {
 		curFBWidth_ = targetWidth_;
 		curFBHeight_ = targetHeight_;
 	}
 
-	curFB_ = pass.render.framebuffer;
+	curFB_ = fb;
 	if (curFB_) {
 		// Without FBO_ARB / GLES3, this will collide with bind_for_read, but there's nothing
 		// in ES 2.0 that actually separate them anyway of course, so doesn't matter.

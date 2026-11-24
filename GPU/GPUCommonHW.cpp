@@ -636,8 +636,10 @@ u32 GPUCommonHW::CheckGPUFeatures() const {
 	}
 
 	if (StereoscopyEnabled(draw_)) {
-		// Framebuffers get a layer per eye, and are sampled as arrays.
-		features |= GPU_USE_STEREOSCOPY | GPU_USE_SINGLE_PASS_STEREO | GPU_USE_FRAMEBUFFER_ARRAYS;
+		features |= GPU_USE_STEREOSCOPY;
+		if (draw_->GetDeviceCaps().multiViewSupported) {
+			features |= GPU_USE_SINGLE_PASS_STEREO | GPU_USE_FRAMEBUFFER_ARRAYS;
+		}
 	}
 
 	// Headless --disable-gpu-features, to test the fallbacks for GPUs without them (old Mali has none of

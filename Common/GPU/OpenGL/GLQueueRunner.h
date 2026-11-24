@@ -39,6 +39,13 @@ class GLRFramebuffer;
 class GLRProgram;
 class GLRInputLayout;
 
+struct GLRFramebufferTextureBinding {
+	GLRFramebuffer *framebuffer;
+	int slot;
+	int aspect;
+	int layer;
+};
+
 enum class GLRRenderCommand : uint8_t {
 	DEPTH,
 	STENCIL,
@@ -158,11 +165,7 @@ struct GLRRenderData {
 			GLRAllocType allocType;
 			uint8_t *data;  // owned, delete[]-d
 		} texture_subimage;
-		struct {
-			GLRFramebuffer* framebuffer;
-			int slot;
-			int aspect;
-		} bind_fb_texture;
+		GLRFramebufferTextureBinding bind_fb_texture;
 		struct {
 			GLRBuffer *buffer;
 			GLuint target;
@@ -320,6 +323,7 @@ struct GLRStep {
 			GLRRenderPassAction color;
 			GLRRenderPassAction depth;
 			GLRRenderPassAction stencil;
+			int numRebinds;  // Commands at the start that only bind again what's bound, for stereoscopy.
 		} render;
 		struct {
 			GLRFramebuffer *src;
@@ -390,8 +394,10 @@ public:
 private:
 	void InitCreateFramebuffer(const GLRInitStep &step);
 
-	void PerformBindFramebufferAsRenderTarget(const GLRStep &pass);
+	void PerformBindFramebufferAsRenderTarget(GLRFramebuffer *fb);
 	void PerformRenderPass(const GLRStep &pass, bool first, bool last, GLQueueProfileContext &profile);
+	void PerformRenderPassEye(const GLRStep &pass, GLRFramebuffer *fb, int eye, bool first, bool last, GLQueueProfileContext &profile);
+	void SaveUniform(GLRProgram *program, GLint loc, const GLRRenderData &c, bool forRightEye);
 	void PerformCopy(const GLRStep &pass);
 	void PerformBlit(const GLRStep &pass);
 	void PerformReadback(const GLRStep &pass);
@@ -405,6 +411,18 @@ private:
 	std::string StepToString(const GLRStep &step) const;
 
 	GLRFramebuffer *curFB_ = nullptr;
+
+	// Stereoscopy runs each pass once per eye (see PerformRenderPass), and the right eye has to start with the
+	// uniforms the left one did. Once there's been a stereo pass, every uniform set is saved in its program, and
+	// the left eye's run notes what it overwrites, for the right eye to set back.
+	struct UniformUndo {
+		GLRProgram *program;
+		GLint loc;
+		GLRRenderData data;
+	};
+	bool saveUniforms_ = false;
+	uint32_t stereoPass_ = 0;
+	std::vector<UniformUndo> uniformUndo_;
 
 	GLuint globalVAO_ = 0;
 

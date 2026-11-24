@@ -4137,7 +4137,7 @@ void FramebufferManagerCommon::BlitUsingRaster(
 
 int FramebufferManagerCommon::GetFramebufferLayers() const {
 	int layers = 1;
-	if (gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO)) {
+	if (gstate_c.Use(GPU_USE_SINGLE_PASS_STEREO) || gstate_c.Use(GPU_USE_STEREOSCOPY)) {
 		layers = 2;
 	}
 	return layers;

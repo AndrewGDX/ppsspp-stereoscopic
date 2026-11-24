@@ -577,6 +577,7 @@ OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameT
 	caps_.framebufferBlitSupported = gl_extensions.NV_framebuffer_blit || gl_extensions.ARB_framebuffer_object || gl_extensions.GLES3;
 	caps_.framebufferDepthBlitSupported = caps_.framebufferBlitSupported;
 	caps_.framebufferStencilBlitSupported = caps_.framebufferBlitSupported;
+	caps_.stereoPassReplaySupported = gl_extensions.IsGLES || gl_extensions.ARB_framebuffer_object || gl_extensions.EXT_framebuffer_object;
 	caps_.depthClampSupported = gl_extensions.ARB_depth_clamp || gl_extensions.EXT_depth_clamp;
 	caps_.blendMinMaxSupported = gl_extensions.EXT_blend_minmax;
 	caps_.multiSampleLevelsMask = 1;  // More could be supported with some work.
@@ -967,6 +968,7 @@ public:
 	OpenGLFramebuffer(GLRenderManager *render, GLRFramebuffer *framebuffer) : render_(render), framebuffer_(framebuffer) {
 		width_ = framebuffer->width;
 		height_ = framebuffer->height;
+		layers_ = framebuffer->rightEye ? 2 : 1;
 		hasDepthStencil_ = framebuffer->z_stencil_;
 	}
 	~OpenGLFramebuffer() {
@@ -1584,10 +1586,9 @@ void OpenGLInputLayout::Compile(const InputLayoutDesc &desc) {
 Framebuffer *OpenGLContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	CheckGLExtensions();
 
-	// TODO: Support multiview later. (It's our only use case for multi layers).
-	_dbg_assert_(desc.numLayers == 1);
+	_dbg_assert_(desc.numLayers == 1 || (desc.numLayers == 2 && caps_.stereoPassReplaySupported));
 
-	GLRFramebuffer *framebuffer = renderManager_.CreateFramebuffer(desc.width, desc.height, desc.z_stencil, desc.tag);
+	GLRFramebuffer *framebuffer = renderManager_.CreateFramebuffer(desc.width, desc.height, desc.numLayers, desc.z_stencil, desc.tag);
 	OpenGLFramebuffer *fbo = new OpenGLFramebuffer(&renderManager_, framebuffer);
 	return fbo;
 }
@@ -1624,7 +1625,12 @@ void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int s
 		if (aspects & Aspect::STENCIL_BIT)
 			glAspect |= GL_STENCIL_BUFFER_BIT;
 	}
-	renderManager_.CopyFramebuffer(src->framebuffer_, GLRect2D{ srcX, srcY, width, height }, dst->framebuffer_, GLOffset2D{ dstX, dstY }, glAspect, tag);
+	const GLRect2D srcRect{ srcX, srcY, width, height };
+	const GLOffset2D dstPos{ dstX, dstY };
+	renderManager_.CopyFramebuffer(src->framebuffer_, srcRect, dst->framebuffer_, dstPos, glAspect, tag);
+	if (src->framebuffer_->rightEye && dst->framebuffer_->rightEye) {
+		renderManager_.CopyFramebuffer(src->framebuffer_->rightEye.get(), srcRect, dst->framebuffer_->rightEye.get(), dstPos, glAspect, tag);
+	}
 }
 
 bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *fbdst, int dstX1, int dstY1, int dstX2, int dstY2, Aspect aspects, FBBlitFilter linearFilter, const char *tag) {
@@ -1646,7 +1652,13 @@ bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, in
 	if (aspects & Aspect::STENCIL_BIT)
 		aspect |= GL_STENCIL_BUFFER_BIT;
 
-	renderManager_.BlitFramebuffer(src->framebuffer_, GLRect2D{ srcX1, srcY1, srcX2 - srcX1, srcY2 - srcY1 }, dst->framebuffer_, GLRect2D{ dstX1, dstY1, dstX2 - dstX1, dstY2 - dstY1 }, aspect, linearFilter == FB_BLIT_LINEAR, tag);
+	const GLRect2D srcRect{ srcX1, srcY1, srcX2 - srcX1, srcY2 - srcY1 };
+	const GLRect2D dstRect{ dstX1, dstY1, dstX2 - dstX1, dstY2 - dstY1 };
+	const bool linear = linearFilter == FB_BLIT_LINEAR;
+	renderManager_.BlitFramebuffer(src->framebuffer_, srcRect, dst->framebuffer_, dstRect, aspect, linear, tag);
+	if (src->framebuffer_->rightEye && dst->framebuffer_->rightEye) {
+		renderManager_.BlitFramebuffer(src->framebuffer_->rightEye.get(), srcRect, dst->framebuffer_->rightEye.get(), dstRect, aspect, linear, tag);
+	}
 	return true;
 }
 
@@ -1669,7 +1681,7 @@ void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspe
 		glAspect |= GL_STENCIL_BUFFER_BIT;
 		boundTextures_[binding] = &fb->framebuffer_->z_stencil_texture;
 	}
-	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, glAspect);
+	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, glAspect, layer);
 }
 
 void OpenGLContext::GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) {

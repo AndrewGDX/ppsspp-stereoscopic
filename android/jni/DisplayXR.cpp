@@ -199,6 +199,42 @@ extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_native
 
 using namespace PPSSPP_VK;
 namespace {
+// The loader keeps the raw Context handle it's initialized with and uses it again on later calls
+// (runtime_interface.cpp asks the runtime broker through it), so it gets a global ref that's never deleted.
+// It also loads the runtime into our process, so it's never unloaded either.
+struct Loader {
+	void *library = nullptr;
+	PFN_xrGetInstanceProcAddr get = nullptr;
+	jobject context = nullptr;
+
+	bool Init(JNIEnv *env, jobject app) {
+		if (get) { return true; }
+		if (!library) { library = dlopen("libopenxr_loader.so", RTLD_NOW | RTLD_LOCAL); }
+		if (!library) { return false; }
+		auto proc = (PFN_xrGetInstanceProcAddr)dlsym(library, "xrGetInstanceProcAddr");
+		PFN_xrInitializeLoaderKHR initialize = nullptr;
+		if (!proc || XR_FAILED(proc(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction *)&initialize)) || !initialize) { return false; }
+		if (!context) {
+			jclass cls = env->GetObjectClass(app);
+			jmethodID getContext = env->GetMethodID(cls, "getApplicationContext", "()Landroid/content/Context;");
+			jobject local = getContext ? env->CallObjectMethod(app, getContext) : nullptr;
+			env->DeleteLocalRef(cls);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); }
+			if (local) {
+				context = env->NewGlobalRef(local);
+				env->DeleteLocalRef(local);
+			}
+		}
+		if (!context) { return false; }
+		XrLoaderInitInfoAndroidKHR init{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
+		init.applicationVM = vm;
+		init.applicationContext = context;
+		if (XR_FAILED(initialize((XrLoaderInitInfoBaseHeaderKHR *)&init))) { return false; }
+		get = proc;
+		return true;
+	}
+} loader;  // Guarded by xrMutex, like every XR.
+
 struct XR {
 	PFN_xrGetInstanceProcAddr get = nullptr;
 	PFN_xrCreateInstance create = nullptr;
@@ -214,7 +250,6 @@ struct XR {
 	XrSystemId system = XR_NULL_SYSTEM_ID;
 	XrSession session = XR_NULL_HANDLE;
 	jobject host = nullptr;
-	void *library = nullptr;
 
 	template<typename T> bool Load(const char *name, T &fn, XrInstance inst) {
 		return XR_SUCCEEDED(get(inst, name, (PFN_xrVoidFunction *)&fn)) && fn;
@@ -223,25 +258,10 @@ struct XR {
 		Env e;
 		if (!e.env || !app) { return false; }
 		host = e.env->NewGlobalRef(app);
-		library = dlopen("libopenxr_loader.so", RTLD_NOW | RTLD_LOCAL);
-		if (!library) { return false; }
-		get = (PFN_xrGetInstanceProcAddr)dlsym(library, "xrGetInstanceProcAddr");
-		if (!get || !Load("xrCreateInstance", create, XR_NULL_HANDLE) ||
+		if (!loader.Init(e.env, app)) { return false; }
+		get = loader.get;
+		if (!Load("xrCreateInstance", create, XR_NULL_HANDLE) ||
 			!Load("xrEnumerateInstanceExtensionProperties", enumerate, XR_NULL_HANDLE)) { return false; }
-		PFN_xrInitializeLoaderKHR initialize = nullptr;
-		if (!Load("xrInitializeLoaderKHR", initialize, XR_NULL_HANDLE)) { return false; }
-		XrLoaderInitInfoAndroidKHR init{XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
-		init.applicationVM = vm;
-		// The loader may cache its Context across Activity recreations.
-		jclass cls = e.env->GetObjectClass(app);
-		jmethodID getContext = e.env->GetMethodID(cls, "getApplicationContext", "()Landroid/content/Context;");
-		jobject context = getContext ? e.env->CallObjectMethod(app, getContext) : nullptr;
-		e.env->DeleteLocalRef(cls);
-		if (e.env->ExceptionCheck()) { e.env->ExceptionClear(); }
-		init.applicationContext = context;
-		XrResult initialized = context ? initialize((XrLoaderInitInfoBaseHeaderKHR *)&init) : XR_ERROR_INITIALIZATION_FAILED;
-		if (context) { e.env->DeleteLocalRef(context); }
-		if (XR_FAILED(initialized)) { return false; }
 		uint32_t count = 0;
 		if (XR_FAILED(enumerate(nullptr, 0, &count, nullptr))) { return false; }
 		std::vector<XrExtensionProperties> extensions(count, {XR_TYPE_EXTENSION_PROPERTIES});
@@ -320,7 +340,6 @@ struct XR {
 		if (instance && destroy) { destroy(instance); }
 		Env e;
 		if (host && e.env) { e.env->DeleteGlobalRef(host); }
-		if (library) { dlclose(library); }
 	}
 };
 std::mutex xrMutex;

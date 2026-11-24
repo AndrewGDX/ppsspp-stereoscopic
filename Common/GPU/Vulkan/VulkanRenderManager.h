@@ -244,6 +244,9 @@ public:
 	void Finish();
 	void Present();
 	void CheckNothingPending();
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	void SetAndroidPresent(std::function<void(VkImage, VkSemaphore)> callback) { androidPresent_ = std::move(callback); }
+#endif
 
 	void SetInvalidationCallback(InvalidationCallback callback) {
 		invalidationCallback_ = callback;
@@ -623,6 +626,9 @@ private:
 	std::vector<VKRSwapchain *> extraSwapchains_;
 
 	// Execution time state
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	std::function<void(VkImage, VkSemaphore)> androidPresent_;
+#endif
 	VulkanContext *vulkan_;
 	std::thread renderThread_;
 	VulkanQueueRunner queueRunner_;

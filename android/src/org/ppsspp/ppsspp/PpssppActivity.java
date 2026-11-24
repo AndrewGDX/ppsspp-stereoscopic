@@ -99,6 +99,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 
 	// The surface we hand to the native render loop thread, for both OpenGL and Vulkan.
 	private NativeSurfaceView mSurfaceView;
+	private DisplayXRSupport displayXR;
 	// Which bars updateSystemUiVisibility hid. Before Android 11, the insets don't tell us: decorFitsSystemWindows(false)
 	// sets LAYOUT_STABLE, so they keep the space of hidden bars.
 	private boolean statusBarsHidden = false;
@@ -311,6 +312,10 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	public void onRequestPermissionsResult(int requestCode, @NonNull String [] permissions, @NonNull int[] grantResults) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+		if (requestCode == DisplayXRSupport.CAMERA_REQUEST && displayXR != null) {
+			displayXR.resume();
+			return;
+		}
 		switch (requestCode) {
 			case REQUEST_CODE_STORAGE_PERMISSION:
 				if (permissionsGranted(permissions, grantResults)) {
@@ -820,6 +825,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		updateSystemUiVisibility();
 
 		mSurfaceView = new NativeSurfaceView(this);
+		displayXR = new DisplayXRSupport(this, mSurfaceView);
 		surfaceManager.setSurfaceView(mSurfaceView);
 		setInsetsListener(mSurfaceView);
 		setContentView(mSurfaceView);
@@ -1146,6 +1152,10 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		audioFocusChangeListener = null;
 		audioManager = null;
 
+		if (displayXR != null) {
+			displayXR.close();
+			displayXR = null;
+		}
 		surfaceManager.setSurfaceView(null);
 		if (mPowerSaveModeReceiver != null) {
 			mPowerSaveModeReceiver.destroy(this);
@@ -1291,6 +1301,9 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 			Log.i(TAG, "Calling mCameraHelper.pause");
 			mCameraHelper.pause();
 		}
+		if (displayXR != null) {
+			displayXR.pause();
+		}
 		Log.i(TAG, "onPause end");
 	}
 
@@ -1311,7 +1324,16 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		if (mCameraHelper != null) {
 			mCameraHelper.resume();
 		}
+		if (displayXR != null) {
+			displayXR.resume();
+		}
 		Log.i(TAG, "onResume end");
+	}
+
+	void refreshDisplayXRSurface() {
+		if (surfaceManager != null) {
+			surfaceManager.refreshSize();
+		}
 	}
 
 	// Sensor management

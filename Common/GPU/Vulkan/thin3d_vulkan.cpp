@@ -2101,6 +2101,10 @@ void VKContext::InvalidateFramebuffer(FBInvalidationStage stage, Aspect aspects)
 
 uint64_t VKContext::GetNativeObject(NativeObject obj, void *srcObject) {
 	switch (obj) {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	case NativeObject::ANDROID_FRAMEBUFFER:
+		return (uint64_t)((VKFramebuffer *)srcObject)->GetFB();
+#endif
 	case NativeObject::CONTEXT:
 		return (uint64_t)vulkan_;
 	case NativeObject::INIT_COMMANDBUFFER:

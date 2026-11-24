@@ -23,6 +23,10 @@
 //
 // Windows has its own code that bypasses the framework entirely.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include "ppsspp_config.h"
 
 #include "ext/rcheevos/include/rc_client.h"
@@ -1306,6 +1310,9 @@ void NativeShutdownGraphics(GraphicsContext *graphicsContext) {
 static void SendMouseDeltaAxis();
 
 void NativeFrame(GraphicsContext *graphicsContext) {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	DisplayXR_Update(graphicsContext->GetDrawContext());
+#endif
 	PROFILE_END_FRAME();
 
 	if (!(Core_IsActive() || Core_IsStepping()))

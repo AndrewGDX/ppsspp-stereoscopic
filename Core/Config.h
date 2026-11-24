@@ -429,6 +429,10 @@ public:
 
 	// Stereoscopic 3D (StereoscopyMode). Separate from VR stereo, though it shares the single-pass stereo rendering.
 	int iStereoscopyMode;
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	bool bDisplayXRDefaultApplied = false;
+	bool ApplyDisplayXRDefault();
+#endif
 	int iStereoscopyDominantEye;  // StereoscopyDominantEye
 	bool bStereoscopySwapEyes;
 	float fStereoscopySeparation;

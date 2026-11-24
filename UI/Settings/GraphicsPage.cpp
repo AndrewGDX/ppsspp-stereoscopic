@@ -15,6 +15,11 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#include "android/jni/DisplayXRSettings.h"
+#endif
+
 #include <algorithm>
 #include <string>
 
@@ -318,10 +323,28 @@ void BuildGraphicsSettings(SettingsPage *page) {
 		auto stereoscopyAvailable = [draw]() { return StereoscopyAvailable(draw); };
 		auto stereoscopyOn = [draw]() { return StereoscopyOn(draw); };
 		auto uiDetectionOn = [draw]() { return StereoscopyUIDetectionOn(draw); };
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+		SettingItem &mode = page->Custom({I18NCat::GRAPHICS, "Stereoscopic 3D Mode"}, [manager = page->Host()->PageScreenManager()](ViewGroup *parent) -> View * {
+			return parent->Add(new DisplayXRModeChoice(manager));
+		}).EnabledFunc(stereoscopyAvailable);
+		if (DisplayXR_GetStatus() != DisplayXRStatus::UNSUPPORTED) {
+			page->Custom({I18NCat::GRAPHICS, "DisplayXR setup", "DisplayXR installation and setup"}, [](ViewGroup *parent) -> View * {
+				Choice *link = parent->Add(new Choice("DisplayXR installation and setup"));
+				link->OnClick.Add([](UI::EventParams &) {
+					System_LaunchUrl(LaunchUrlType::BROWSER_URL, "https://github.com/DisplayXR/displayxr-installer/blob/main/android-installer/README.md");
+				});
+				return link;
+			});
+			page->Custom("DisplayXR status", [](ViewGroup *parent) -> View * {
+				return parent->Add(new DisplayXRStatusView());
+			});
+		}
+#else
 		SettingItem &mode = page->Setting(&g_Config.iStereoscopyMode).EnabledFunc(stereoscopyAvailable).OnChange([](UI::EventParams &) {
 			// Takes effect in the running game, which recreates its framebuffers if stereo turns on or off.
 			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 		});
+#endif
 		if (!StereoscopySupported(draw) && !g_Config.bSoftwareRendering) {
 			mode.Hint({I18NCat::GRAPHICS, "StereoscopyUnsupported Tip", "Unavailable with the current graphics backend or device"});
 		}

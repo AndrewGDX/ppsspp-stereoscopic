@@ -207,6 +207,13 @@ public:
 	// The coreVersion is to avoid enabling extensions that are merged into core Vulkan from a certain version.
 	bool EnableInstanceExtension(const char *extension, uint32_t coreVersion);
 	bool EnableDeviceExtension(const char *extension, uint32_t coreVersion);
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	bool SupportsDisplayXRPresent() const {
+		const VkImageUsageFlags required = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		return (surfCapabilities_.supportedUsageFlags & required) == required &&
+			(surfCapabilities_.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR);
+	}
+#endif
 
 	// Was previously two functions, ChooseDevice and CreateDevice.
 	// extraDeviceExtensions/extraRequiredFeatures let a host application (e.g. libretro) merge in extra

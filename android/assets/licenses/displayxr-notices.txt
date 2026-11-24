@@ -1,0 +1,13 @@
+DisplayXR client extension headers
+Copyright 2026, DisplayXR
+Copyright 2025-2026, The DisplayXR Project
+Apache-2.0. See displayxr-apache-2.0.txt.
+Source: https://github.com/DisplayXR/displayxr-runtime/tree/v2.70.6
+Pinned runtime commit: f80f3b7
+
+OpenXR loader for Android 1.1.63
+Copyright The Khronos Group Inc.
+License: see openxr-loader.txt, reproduced from the Maven AAR.
+Source: https://github.com/KhronosGroup/OpenXR-SDK-Source/tree/release-1.1.63
+
+No Leia SDK, vendor display plugin or DisplayXR runtime is included in this APK.

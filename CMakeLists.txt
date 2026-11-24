@@ -1131,6 +1131,7 @@ add_subdirectory(GPU)
 add_subdirectory(Core)
 
 if(ANDROID AND NOT LIBRETRO)
+	target_sources(Core PRIVATE android/jni/DisplayXR.cpp)
 	add_subdirectory(ext/oboe-build)
 	add_library(ppsspp_jni SHARED ${AndroidJniSource})
 	target_link_libraries(ppsspp_jni Core log EGL oboe)

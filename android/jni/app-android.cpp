@@ -4,6 +4,10 @@
 // It calls a set of methods defined in NativeApp.h. These should be implemented
 // by your game or app.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include "ppsspp_config.h"
 
 #if PPSSPP_PLATFORM(ANDROID)
@@ -1611,6 +1615,9 @@ void getDesiredBackbufferSize(int &sz_x, int &sz_y) {
 	sz_y = display_yres;
 
 	int scale = g_Config.iAndroidHwScale;
+	if (DisplayXR_Selected() && DisplayXR_Available()) {
+		scale = 0;
+	}
 	// Override hw scale for TV type devices.
 	if (System_GetPropertyInt(SYSPROP_DEVICE_TYPE) == DEVICE_TYPE_TV)
 		scale = 0;

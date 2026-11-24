@@ -341,6 +341,9 @@ enum class StereoscopyMode : int {
 	FULL_SBS,
 	HALF_TAB,
 	FULL_TAB,
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	DISPLAY_XR = 5,
+#endif
 };
 
 enum class StereoscopyDominantEye : int {

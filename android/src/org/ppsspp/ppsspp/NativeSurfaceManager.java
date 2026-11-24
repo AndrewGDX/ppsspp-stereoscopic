@@ -169,6 +169,13 @@ public class NativeSurfaceManager implements SurfaceHolder.Callback {
 		NativeApp.setDisplayParameters(metrics.widthPixels, metrics.heightPixels, (int)densityDpi, display.getRefreshRate());
 	}
 
+	void refreshSize() {
+		getDesiredBackbufferSize(desiredSize);
+		if (surfaceView != null) {
+			surfaceView.getHolder().setFixedSize(desiredSize.x, desiredSize.y);
+		}
+	}
+
 	private void getDesiredBackbufferSize(Point sz) {
 		NativeApp.computeDesiredBackbufferDimensions();
 		sz.x = NativeApp.getDesiredBackbufferWidth();

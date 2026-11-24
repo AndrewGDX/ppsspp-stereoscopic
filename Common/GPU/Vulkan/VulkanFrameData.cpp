@@ -1,3 +1,7 @@
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include <mutex>
 
 #include "VulkanFrameData.h"
@@ -120,6 +124,15 @@ VkResult FrameData::QueuePresent(VulkanContext *vulkan, FrameDataShared &shared)
 		return presentation->QueuePresent(vulkan, vulkan->GetGraphicsQueue(), curSwapchainImage, shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore);
 	}
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (androidPresent) {
+		auto callback = std::move(androidPresent);
+		callback(shared.swapchainImages_[curSwapchainImage].image, shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore);
+	} else {
+		DisplayXR_Present(vulkan, index, (void *)shared.swapchainImages_[curSwapchainImage].image,
+			(void *)shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore);
+	}
+#endif
 	VkSwapchainKHR swapchain = vulkan->GetSwapchain();
 	VkPresentInfoKHR present = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 	present.swapchainCount = 1;

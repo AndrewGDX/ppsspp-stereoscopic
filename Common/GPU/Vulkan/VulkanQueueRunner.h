@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include <functional>
+#endif
+
 #include <cstdint>
 #include <mutex>
 #include <condition_variable>
@@ -210,6 +214,9 @@ struct VKRStep {
 // These are enqueued from the main thread,
 // and the render thread pops them off
 struct VKRRenderThreadTask {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	std::function<void(VkImage, VkSemaphore)> androidPresent;
+#endif
 	VKRRenderThreadTask(VKRRunType _runType) : runType(_runType) {}
 	std::vector<VKRStep *> steps;
 	int frame = -1;

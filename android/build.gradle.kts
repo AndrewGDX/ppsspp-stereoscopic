@@ -58,6 +58,7 @@ val gitVersionCode =
 		commitsSinceTag
 
 dependencies {
+	implementation("org.khronos.openxr:openxr_loader_for_android:1.1.63")
 	// appcompat 1.8.0 and later need minSdk 23.
 	implementation("androidx.appcompat:appcompat:1.7.1")
 	implementation("androidx.documentfile:documentfile:1.1.0")
@@ -175,6 +176,7 @@ android {
 			aidl.directories.add("src")
 			resources.directories.add("src")
 			assets.directories.add("../assets")
+			assets.directories.add("assets")
 		}
 		create("normal") {
 			res.directories.add("normal/res")

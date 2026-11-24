@@ -1,3 +1,7 @@
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include <algorithm>
 #include <cstdint>
 
@@ -787,6 +791,12 @@ VulkanRenderManager::~VulkanRenderManager() {
 	_dbg_assert_(!runCompileThread_);  // StopThread should already have been called from DestroyBackbuffers.
 
 	vulkan_->WaitUntilQueueIdle();
+
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	androidPresent_ = {};
+	for (auto &frame : frameData_) { frame.androidPresent = {}; }
+	DisplayXR_Destroy(vulkan_);
+#endif
 	vulkan_->PerformPendingDeletes();  // Some callbacks can contain a reference to the render manager.
 
 	_dbg_assert_(pipelineLayouts_.empty());
@@ -1871,6 +1881,9 @@ void VulkanRenderManager::Finish() {
 
 	VLOG("PUSH: Frame[%d]", curFrame);
 	VKRRenderThreadTask *task = new VKRRenderThreadTask(VKRRunType::SUBMIT);
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	task->androidPresent = std::move(androidPresent_);
+#endif
 	task->frame = curFrame;
 	if (useRenderThread_) {
 		std::unique_lock<std::mutex> lock(pushMutex_);
@@ -1990,6 +2003,9 @@ void VulkanRenderManager::Run(VKRRenderThreadTask &task) {
 	PROFILE_THIS_SCOPE("vk_submit");
 	switch (task.runType) {
 	case VKRRunType::SUBMIT:
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+		frameData.androidPresent = std::move(task.androidPresent);
+#endif
 		// A frame that never drew to the backbuffer never acquired an image, so there's nothing to
 		// wait for or present. Headless has such frames, and so does shutdown.
 		if (!frameData.hasAcquired)

@@ -15,6 +15,10 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -350,7 +354,11 @@ static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect 
 }
 
 static bool StereoscopySideBySide(StereoscopyMode mode) {
-	return mode == StereoscopyMode::HALF_SBS || mode == StereoscopyMode::FULL_SBS;
+	return mode == StereoscopyMode::HALF_SBS || mode == StereoscopyMode::FULL_SBS
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+		|| mode == StereoscopyMode::DISPLAY_XR
+#endif
+		;
 }
 
 // With stereoscopy, post shaders run on both eyes composited side by side (or top and bottom), so their
@@ -760,10 +768,20 @@ bool StereoscopySupported(Draw::DrawContext *draw) {
 }
 
 bool StereoscopyEnabled(Draw::DrawContext *draw) {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (DisplayXR_Selected() && !DisplayXR_CanRender(draw)) {
+		return false;
+	}
+#endif
 	return g_Config.iStereoscopyMode != (int)StereoscopyMode::OFF && !g_Config.bSkipBufferEffects && StereoscopySupported(draw);
 }
 
 bool GetStereoscopyEyeViewports(const DisplayLayoutConfig &config, float pixelWidth, float pixelHeight, FRect viewports[2]) {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (DisplayXR_Selected()) {
+		return false;  // The service composites a full-window mono UI overlay.
+	}
+#endif
 	// The flag follows the setting on the next frame, so this matches how the game was drawn.
 	const StereoscopyMode mode = (StereoscopyMode)g_Config.iStereoscopyMode;
 	if (!gstate_c.Use(GPU_USE_STEREOSCOPY) || mode == StereoscopyMode::OFF) {
@@ -863,6 +881,9 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	const bool vrStereo = UseVRStereoSource();
 	// A mono source (like a frame from RAM) is shown to both eyes, so the layout doesn't jump.
 	stereoscopyOutput_ = gstate_c.Use(GPU_USE_STEREOSCOPY) && !(flags & OutputFlags::NATIVE_SIZE);
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (DisplayXR_Selected() && !DisplayXR_CanRender(draw_)) { stereoscopyOutput_ = false; }
+#endif
 	const bool postShaderAllowed = usePostShader_ && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
 	// Post shaders run on both eyes composited, once they're built for this layout (see UpdatePostShader).
 	stereoPost_ = stereoscopyOutput_ && postShaderAllowed && stereoComposite_ && stereoPostMode_ == (StereoscopyMode)g_Config.iStereoscopyMode;
@@ -1335,6 +1356,11 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 		return;
 	}
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	const bool displayXR = stereoscopyOutput_ && !hasOutputOverride_ && lang_ == GLSL_VULKAN &&
+		DisplayXR_Begin(draw_, output.pixelWidth, output.pixelHeight);
+	if (DisplayXR_Selected() && !displayXR) { stereoscopyOutput_ = false; }
+#endif
 	if (drawOverlay && overlay.layer == OverlayLayer::Background) {
 		DrawOverlay(overlay, output);
 	}
@@ -1417,6 +1443,11 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	DoRelease(srcFramebuffer_);
 	DoRelease(srcTexture_);
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (displayXR) {
+		DisplayXR_End(draw_);
+	}
+#endif
 	// Unbinds all textures and samplers too, needed since sometimes a MakePixelTexture is deleted etc.
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 

@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include <functional>
+#endif
+
 #include <atomic>
 #include <cstdint>
 
@@ -120,6 +124,9 @@ enum class FrameSubmitType {
 
 // Per-frame data, round-robin so we can overlap submission with execution of the previous frame.
 struct FrameData {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	std::function<void(VkImage, VkSemaphore)> androidPresent;
+#endif
 	bool skipSwap = false;
 
 	std::mutex fenceMutex;

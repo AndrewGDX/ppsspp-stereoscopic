@@ -97,6 +97,7 @@
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
 #include "Core/ConfigSettings.h"
+#include "android/jni/DisplayXRPolicy.h"
 #include "Core/HW/StereoResampler.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/File/VFS/VFS.h"
@@ -4043,6 +4044,45 @@ static constexpr ConfigSetting testChoiceSetting = ConfigSetting("TestChoice", C
 	.Label(I18NCat::AUDIO, "Test choice").Choices(testChoices, 1);
 static_assert(testChoiceSetting.Info().choiceCount == 3 && testChoiceSetting.Info().choiceMin == 1 && !testChoiceSetting.Info().HasRange());
 
+bool TestDisplayXRPolicy() {
+	// A real device gains a new first choice without renumbering saved layouts.
+	const auto ordinary = DisplayXRPolicy::ModeChoices(false, 0);
+	const auto supported = DisplayXRPolicy::ModeChoices(true, 0);
+	EXPECT_EQ_INT(ordinary.size(), 5);
+	EXPECT_EQ_INT(supported.size(), 6);
+	EXPECT_EQ_INT(supported.front(), 5);
+	for (int i = 0; i < 5; ++i) {
+		EXPECT_EQ_INT(ordinary[i], i);
+		EXPECT_EQ_INT(supported[i + 1], i);
+	}
+	EXPECT_EQ_INT(DisplayXRPolicy::ModeChoices(false, 5).front(), 5);
+	// Runtime disappearance must leave the saved preference identifiable.
+	for (int overrideMode : {-1, 0, 1, 2, 3, 4}) {
+		IniFile global, game;
+		global.GetOrCreateSection("Graphics")->Set("StereoscopyMode", 3);
+		global.GetOrCreateSection("Graphics")->Set("UnrelatedSetting", 42);
+		if (overrideMode >= 0) { game.GetOrCreateSection("Graphics")->Set("StereoscopyMode", overrideMode); }
+		int current = overrideMode >= 0 ? overrideMode : 3;
+		EXPECT_FALSE(DisplayXRPolicy::ApplyDefault(global, &game, current, false));
+		EXPECT_EQ_INT(current, overrideMode >= 0 ? overrideMode : 3);
+		EXPECT_TRUE(DisplayXRPolicy::ApplyDefault(global, &game, current, true));
+		EXPECT_EQ_INT(current, overrideMode >= 0 ? overrideMode : 5);
+		int stored = -1;
+		EXPECT_TRUE(global.GetSection("Graphics")->Get("StereoscopyMode", &stored));
+		EXPECT_EQ_INT(stored, 5);
+		EXPECT_TRUE(global.GetSection("Graphics")->Get("UnrelatedSetting", &stored));
+		EXPECT_EQ_INT(stored, 42);
+		// Later user edits survive subsequent detection and a runtime reinstall.
+		current = 4;
+		global.GetOrCreateSection("Graphics")->Set("StereoscopyMode", 4);
+		EXPECT_FALSE(DisplayXRPolicy::ApplyDefault(global, &game, current, true));
+		EXPECT_EQ_INT(current, 4);
+		EXPECT_TRUE(global.GetSection("Graphics")->Get("StereoscopyMode", &stored));
+		EXPECT_EQ_INT(stored, 4);
+	}
+	return true;
+}
+
 bool TestConfigSettings() {
 	g_Config.Init();
 
@@ -5263,6 +5303,7 @@ TestItem availableTests[] = {
 	TEST_ITEM(CrossSIMD),
 	TEST_ITEM(VolumeFunc),
 	TEST_ITEM(ConfigSettings),
+	TEST_ITEM(DisplayXRPolicy),
 	TEST_ITEM(SplitSearch),
 	TEST_ITEM(FriendlyPath),
 	TEST_ITEM(LinAlg),

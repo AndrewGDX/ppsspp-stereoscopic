@@ -1,5 +1,9 @@
 #define __STDC_LIMIT_MACROS
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -718,6 +722,9 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 	}
 
 	GetDeviceExtensionList(&device_extension_properties_);
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	DisplayXR_DeviceExtensions(this);
+#endif
 
 	device_extensions_enabled_.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
@@ -1637,6 +1644,11 @@ bool VulkanContext::InitSwapchain(VkPresentModeKHR desiredPresentMode) {
 	g_display.rotation = DisplayRotation::ROTATE_0;
 	g_display.rot_matrix.setIdentity();
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (DisplayXR_Selected() && (surfCapabilities_.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)) {
+		preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+	} else
+#endif
 	if (surfCapabilities_.currentTransform & (VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR | VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR)) {
 		preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 	} else if (surfCapabilities_.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
@@ -1707,6 +1719,11 @@ bool VulkanContext::InitSwapchain(VkPresentModeKHR desiredPresentMode) {
 	swap_chain_info.oldSwapchain = swapchain_;
 	swap_chain_info.clipped = true;
 	swap_chain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (DisplayXR_GetStatus() != DisplayXRStatus::UNSUPPORTED && (surfCapabilities_.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+		swap_chain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
+#endif
 
 	presentMode_ = swapchainPresentMode;
 

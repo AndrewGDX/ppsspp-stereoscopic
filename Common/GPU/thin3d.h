@@ -250,6 +250,9 @@ enum class NativeObject {
 	NULL_IMAGEVIEW_ARRAY,
 	THIN3D_PIPELINE_LAYOUT,
 	PUSH_POOL,
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	ANDROID_FRAMEBUFFER,
+#endif
 };
 
 enum class Aspect {

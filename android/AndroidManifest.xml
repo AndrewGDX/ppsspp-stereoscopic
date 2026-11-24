@@ -36,13 +36,20 @@
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- AndroidX minimum SDK workaround. We don't care if it's broken on older versions. -->
-    <uses-sdk tools:overrideLibrary="androidx.appcompat.resources,androidx.appcompat,androidx.fragment,androidx.drawerlayout,androidx.vectordrawable.animated,androidx.vectordrawable,androidx.viewpager,androidx.loader,androidx.activity,androidx.annotation,androidx.customview,androidx.cursoradapter,androidx.arch,androidx.collection,androidx.core,androidx.versionedparcelable,androidx.interpolator,androidx.lifecycle,androidx.loader,androidx.savedstate,androidx.lifecycle.viewmodel,androidx.lifecycle.livedata,androidx.lifecycle.livedata.core,androidx.arch.core,androidx.documentfile"/>
+    <uses-sdk tools:overrideLibrary="org.khronos.openxr.openxr_loader_for_android,androidx.appcompat.resources,androidx.appcompat,androidx.fragment,androidx.drawerlayout,androidx.vectordrawable.animated,androidx.vectordrawable,androidx.viewpager,androidx.loader,androidx.activity,androidx.annotation,androidx.customview,androidx.cursoradapter,androidx.arch,androidx.collection,androidx.core,androidx.versionedparcelable,androidx.interpolator,androidx.lifecycle,androidx.loader,androidx.savedstate,androidx.lifecycle.viewmodel,androidx.lifecycle.livedata,androidx.lifecycle.livedata.core,androidx.arch.core,androidx.documentfile"/>
 
     <supports-screens
         android:largeScreens="true"
         android:normalScreens="true"
         android:smallScreens="true"
         android:xlargeScreens="true" />
+    <queries>
+        <package android:name="com.leialoft.display.config" />
+        <package android:name="com.leia.headtrackingservice" />
+        <package android:name="org.freedesktop.monado.openxr_runtime.out_of_process" />
+        <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
+        <provider android:authorities="org.khronos.openxr.runtime_broker" />
+    </queries>
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -52,6 +59,7 @@
         android:banner="@drawable/ic_banner"
         android:requestLegacyExternalStorage="true"
         android:preserveLegacyExternalStorage="true">
+        <property android:name="android.window.PROPERTY_COMPAT_ALLOW_SANDBOXING_VIEW_BOUNDS_APIS" android:value="false" />
         <meta-data android:name="android.max_aspect" android:value="2.4" />
         <activity
             android:name=".PpssppActivity"

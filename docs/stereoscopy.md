@@ -5,6 +5,9 @@ bottom for a 3D TV, projector or headset that takes such a signal. Settings > Gr
 per game. Separate from VR (`Common/VR`), which shares the single-pass stereo rendering but takes its
 views from the headset.
 
+Android also has an optional [DisplayXR output](displayxr-android.md) for glasses-free 3D on Leia
+devices. It requires Vulkan and a separately installed runtime.
+
 Works with OpenGL, OpenGL ES, Vulkan, Metal and D3D11 (D3D11.3,
 `VPAndRTArrayIndexFromAnyShaderFeedingRasterizer`). Requires buffered hardware rendering.
 

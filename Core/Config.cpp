@@ -15,6 +15,11 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#include "android/jni/DisplayXRPolicy.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -925,7 +930,11 @@ static constexpr const char *msaaLevelNames[] = { "Off", "2x", "4x", "8x", "16x"
 static constexpr const char *androidHwScaleNames[] = { "Native device resolution", "Same as Rendering resolution", "1x PSP", "2x PSP", "3x PSP", "4x PSP", "5x PSP" };
 static constexpr const char *frameSkipNames[] = { "Off", "1", "2", "3", "4" };
 static constexpr const char *skipGPUReadbackModeNames[] = { "No", "Skip", "Copy to texture" };
-static constexpr const char *stereoscopyModeNames[] = { "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)" };
+static constexpr const char *stereoscopyModeNames[] = { "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)"
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	, "DisplayXR"
+#endif
+};
 static constexpr const char *stereoscopyDominantEyeNames[] = { "None", "Left", "Right" };
 static constexpr const char *stereoscopyUIDetectionNames[] = { "Off", "Safe", "Advanced" };
 static constexpr const char *stereoscopyOverlayPositionNames[] = { "Left", "Right", "Top", "Bottom" };
@@ -995,6 +1004,9 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Frame Skipping").Choices(frameSkipNames),
 	ConfigSetting("AutoFrameSkip", SETTING(g_Config, bAutoFrameSkip), false, CfgFlag::PER_GAME | CfgFlag::REPORT)
 		.Label(I18NCat::GRAPHICS, "Auto FrameSkip").OnChanged(&OnAutoFrameSkipChanged),
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	ConfigSetting("DisplayXRDefaultApplied", SETTING(g_Config, bDisplayXRDefaultApplied), false, CfgFlag::DEFAULT),
+#endif
 	ConfigSetting("StereoscopyMode", SETTING(g_Config, iStereoscopyMode), (int)StereoscopyMode::OFF, CfgFlag::PER_GAME | CfgFlag::REPORT)
 		.Label(I18NCat::GRAPHICS, "Stereoscopic 3D Mode").Choices(stereoscopyModeNames),
 	ConfigSetting("StereoscopyDominantEye", SETTING(g_Config, iStereoscopyDominantEye), (int)StereoscopyDominantEye::NONE, CfgFlag::PER_GAME)
@@ -2787,3 +2799,30 @@ int MultiplierToVolume100(float multiplier) {
 float UIScaleFactorToMultiplier(int factor) {
 	return powf(2.0f, (float)factor / 8.0f);
 }
+
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+bool Config::ApplyDisplayXRDefault() {
+	if (bDisplayXRDefaultApplied || !bSaveSettings || !IsFirstInstance()) {
+		return false;
+	}
+	IniFile ini, game;
+	if (!ini.Load(iniFilename_) && File::Exists(iniFilename_)) {
+		return false;
+	}
+	if (IsGameSpecific()) {
+		bool exists = false;
+		Path path = GetGameConfigFilePath(searchPath_, gameId_, &exists);
+		if (exists && !game.Load(path)) {
+			return false;
+		}
+	}
+	int mode = iStereoscopyMode;
+	if (DisplayXRPolicy::ApplyDefault(ini, IsGameSpecific() ? &game : nullptr, mode, true) && ini.Save(iniFilename_)) {
+		bDisplayXRDefaultApplied = true;
+		iStereoscopyMode = mode;
+		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
+		return true;
+	}
+	return false;
+}
+#endif

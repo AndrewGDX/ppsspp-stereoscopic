@@ -15,6 +15,10 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -326,6 +330,22 @@ void StereoscopyOverlay::Cycle(Row &row, bool wrap, int dir) {
 	}
 	const ConfigSettingInfo &info = row.ref->setting->Info();
 	int *value = (int *)row.ptr;
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	if (row.ptr == &g_Config.iStereoscopyMode) {
+		const auto modes = DisplayXR_ModeChoices();
+		auto it = std::find(modes.begin(), modes.end(), *value);
+		int index = it != modes.end() ? (int)(it - modes.begin()) : 0;
+		const int size = (int)modes.size();
+		index = wrap ? (index + dir + size) % size : std::clamp(index + dir, 0, size - 1);
+		if (modes[index] != 5 || DisplayXR_Available()) {
+			*value = modes[index];
+			if (modes[index] == 5) { DisplayXR_RequestRetry(); }
+			DisplayXR_ModeChanged();
+			Changed(row);
+		}
+		return;
+	}
+#endif
 	const int minValue = info.choiceMin;
 	const int maxValue = info.choiceMin + info.choiceCount - 1;
 	int newValue = *value + dir;
@@ -607,8 +627,15 @@ void StereoscopyOverlay::DrawRow(UIContext &dc, const Row &row, bool selected) {
 	case RowType::CHOICE:
 	{
 		const int index = *(const int *)row.ptr - info.choiceMin;
-		const bool atStart = index <= 0;
-		const bool atEnd = index >= info.choiceCount - 1;
+		bool atStart = index <= 0;
+		bool atEnd = index >= info.choiceCount - 1;
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+		if (row.ptr == &g_Config.iStereoscopyMode) {
+			const auto modes = DisplayXR_ModeChoices();
+			atStart = modes.front() == *(int *)row.ptr;
+			atEnd = modes.back() == *(int *)row.ptr;
+		}
+#endif
 		const float chevron = 18.0f * s;
 		float imageW = 1.0f, imageH = 1.0f;
 		dc.Draw()->MeasureImage(ImageID("I_CHEVRON_LEFT"), &imageW, &imageH);

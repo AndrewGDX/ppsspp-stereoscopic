@@ -16,6 +16,9 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "ppsspp_config.h"
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+#include "android/jni/DisplayXR.h"
+#endif
 
 #include <functional>
 
@@ -1876,6 +1879,9 @@ static bool GPUIsBuffered() {
 }
 
 ScreenRenderFlags EmuScreen::PreRender(ScreenRenderMode mode) {
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	DisplayXR_Gameplay((mode & ScreenRenderMode::TOP) != 0 && ShouldRunEmulation(mode));
+#endif
 	// If a boot is in progress, update it.
 	ProcessGameBoot(gamePath_);
 

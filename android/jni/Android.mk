@@ -907,6 +907,8 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/Util/VideoPlayer.cpp \
   $(SRC)/git-version.cpp
 
+EXEC_AND_LIB_FILES += $(SRC)/android/jni/DisplayXR.cpp
+
 LOCAL_MODULE := ppsspp_core
 LOCAL_SRC_FILES := $(EXEC_AND_LIB_FILES)
 include $(BUILD_STATIC_LIBRARY)

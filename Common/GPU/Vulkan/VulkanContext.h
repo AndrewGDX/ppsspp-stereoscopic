@@ -329,6 +329,7 @@ public:
 		VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR presentModeFifoProps;
 		VkPhysicalDeviceScalarBlockLayoutFeatures scalarBlockLayout;
 		VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilitySubset;
+		VkPhysicalDeviceTimelineSemaphoreFeatures timelineSemaphore;
 	};
 
 	const PhysicalDeviceProps &GetPhysicalDeviceProperties(int i = -1) const {

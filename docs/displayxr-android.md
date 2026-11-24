@@ -120,6 +120,17 @@ Before announcing working Lume Pad 2 support, test on real hardware using
 8. Repeat activity recreation with Vulkan validation enabled; check buffer/fd lifetime, semaphore
    reuse, output ownership and retained activities. Compare frame pacing with ordinary stereo.
 
+For diagnosing output on a device, two switches take effect on the next frame, set with
+`adb shell setprop <name> 1` (and `0` to clear):
+
+- `debug.ppsspp.dxr.passthrough`: show the half-SBS input PPSSPP submits instead of the woven output.
+- `debug.ppsspp.dxr.nooverlay`: submit without the UI overlay.
+
+DisplayXR's service captures what it receives when the file
+`/storage/emulated/0/Android/data/org.freedesktop.monado.openxr_runtime.out_of_process/files/displayxr_atlas_trigger.org.ppsspp.ppsspp`
+is created (`adb shell touch`), into the same directory. PPSSPP logs failing OpenXR calls under `DisplayXR:`
+in logcat, and `Session created` and the woven output size when they happen.
+
 The main regression risks are Vulkan external-buffer synchronization, device-specific hardware-buffer
 formats, panel orientation/phase and activity/service lifetimes. Compile and policy tests cannot
 establish that a particular vendor runtime produces correct physical 3D.

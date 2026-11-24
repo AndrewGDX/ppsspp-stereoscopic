@@ -217,6 +217,9 @@ VkResult VulkanContext::CreateInstance(const CreateInfo &info) {
 	if (EnableInstanceExtension(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME, 0)) {
 		extensionsLookup_.EXT_swapchain_colorspace = true;
 	}
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	DisplayXR_InstanceExtensions(this);
+#endif
 
 	// createInfo_ owns the strings.
 	for (const std::string &ext : createInfo_.extraInstanceExtensions) {
@@ -759,6 +762,13 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 	extensionsLookup_.KHR_maintenance3 = EnableDeviceExtension(VK_KHR_MAINTENANCE3_EXTENSION_NAME, VK_API_VERSION_1_1);
 	extensionsLookup_.KHR_maintenance4 = EnableDeviceExtension("VK_KHR_maintenance4", VK_API_VERSION_1_3);
 	extensionsLookup_.KHR_multiview = EnableDeviceExtension(VK_KHR_MULTIVIEW_EXTENSION_NAME, VK_API_VERSION_1_1);
+	// Not used by us, only enabled for DisplayXR (whose runtime creates timeline semaphores on our device).
+	extensionsLookup_.KHR_timeline_semaphore = false;
+	for (const char *enabled : device_extensions_enabled_) {
+		if (!strcmp(enabled, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
+			extensionsLookup_.KHR_timeline_semaphore = true;
+		}
+	}
 
 	extensionsLookup_.EXT_scalar_block_layout = EnableDeviceExtension(VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME, VK_API_VERSION_1_2);
 
@@ -808,8 +818,12 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR presentModeFifoProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR};
 		VkPhysicalDeviceScalarBlockLayoutFeatures scalarBlockLayoutFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES};
 		VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilitySubsetFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR };
+		VkPhysicalDeviceTimelineSemaphoreFeatures timelineSemaphoreFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES };
 
 		ChainStruct(features2, &multiViewFeatures);
+		if (extensionsLookup_.KHR_timeline_semaphore) {
+			ChainStruct(features2, &timelineSemaphoreFeatures);
+		}
 		if (extensionsLookup_.KHR_present_wait) {
 			ChainStruct(features2, &presentWaitFeatures);
 		}
@@ -848,6 +862,9 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		}
 		if (extensionsLookup_.KHR_portability_subset) {
 			deviceFeatures_.available.portabilitySubset = portabilitySubsetFeatures;
+		}
+		if (extensionsLookup_.KHR_timeline_semaphore) {
+			deviceFeatures_.available.timelineSemaphore = timelineSemaphoreFeatures;
 		}
 	} else {
 		vkGetPhysicalDeviceFeatures(physical_devices_[physical_device_], &deviceFeatures_.available.standard);
@@ -915,6 +932,11 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		deviceFeatures_.enabled.portabilitySubset.pNext = nullptr;
 	}
 
+	deviceFeatures_.enabled.timelineSemaphore = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES };
+	if (extensionsLookup_.KHR_timeline_semaphore) {
+		deviceFeatures_.enabled.timelineSemaphore.timelineSemaphore = deviceFeatures_.available.timelineSemaphore.timelineSemaphore;
+	}
+
 	// deviceFeatures_.enabled.multiview.multiviewGeometryShader = deviceFeatures_.available.multiview.multiviewGeometryShader;
 
 	VkPhysicalDeviceFeatures2 features2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
@@ -948,6 +970,9 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		}
 		if (extensionsLookup_.KHR_portability_subset) {
 			ChainStruct(features2, &deviceFeatures_.enabled.portabilitySubset);
+		}
+		if (extensionsLookup_.KHR_timeline_semaphore) {
+			ChainStruct(features2, &deviceFeatures_.enabled.timelineSemaphore);
 		}
 	} else {
 		device_info.pEnabledFeatures = &deviceFeatures_.enabled.standard;

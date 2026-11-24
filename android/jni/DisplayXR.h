@@ -30,6 +30,8 @@ std::string DisplayXR_GetReason();
 bool DisplayXR_Available();
 bool DisplayXR_Selected();
 bool DisplayXR_Active();
+// Overrides the screen rotation setting with landscape (either way up). Portrait weaves too, but jitters.
+bool DisplayXR_LockLandscape();
 bool DisplayXR_CanRender(Draw::DrawContext *draw);
 void DisplayXR_Update(Draw::DrawContext *draw = nullptr);
 void DisplayXR_RequestRetry();
@@ -40,6 +42,8 @@ std::vector<int> DisplayXR_ModeChoices();
 bool DisplayXR_Begin(Draw::DrawContext *draw, int width, int height);
 void DisplayXR_End(Draw::DrawContext *draw);
 void DisplayXR_Destroy(VulkanContext *vulkan);
+// Before the Vulkan instance and device are created: what the runtime needs enabled on them.
+void DisplayXR_InstanceExtensions(VulkanContext *vulkan);
 void DisplayXR_DeviceExtensions(VulkanContext *vulkan);
 // Render thread, before the ordinary swapchain present. The semaphore is consumed and re-signalled.
 void DisplayXR_Present(VulkanContext *vulkan, int frame, void *image, void *semaphore);

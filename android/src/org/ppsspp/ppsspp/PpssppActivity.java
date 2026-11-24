@@ -519,6 +519,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		String installerName = getInstallerName(packageManager);
 
 		NativeApp.audioConfig(optimalFramesPerBuffer, optimalSampleRate);
+		DisplayXRSupport.detect(this);
 		NativeApp.init(model, deviceType, languageRegion, apkFilePath, dataDir, extStorageDir, externalFilesDir, nativeLibDir, additionalStorageDirs, cacheDir, shortcut, installerName, Build.VERSION.SDK_INT, Build.BOARD);
 
 		// Both need the config.

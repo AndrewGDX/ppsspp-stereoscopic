@@ -769,7 +769,8 @@ bool StereoscopySupported(Draw::DrawContext *draw) {
 
 bool StereoscopyEnabled(Draw::DrawContext *draw) {
 #if defined(ANDROID) && !defined(__LIBRETRO__)
-	if (DisplayXR_Selected() && !DisplayXR_CanRender(draw)) {
+	// Not whether it can weave right now: that's decided per frame, and changing this recreates the framebuffers.
+	if (DisplayXR_Selected() && !DisplayXR_Available()) {
 		return false;
 	}
 #endif
@@ -1356,10 +1357,12 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 		return;
 	}
 
+	bool stereoOutput = stereoscopyOutput_;
 #if defined(ANDROID) && !defined(__LIBRETRO__)
-	const bool displayXR = stereoscopyOutput_ && !hasOutputOverride_ && lang_ == GLSL_VULKAN &&
+	const bool displayXR = stereoOutput && !hasOutputOverride_ && lang_ == GLSL_VULKAN &&
 		DisplayXR_Begin(draw_, output.pixelWidth, output.pixelHeight);
-	if (DisplayXR_Selected() && !displayXR) { stereoscopyOutput_ = false; }
+	// One eye, for this frame only: a frame presented again without a new flip may weave.
+	if (DisplayXR_Selected() && !displayXR) { stereoOutput = false; }
 #endif
 	if (drawOverlay && overlay.layer == OverlayLayer::Background) {
 		DrawOverlay(overlay, output);
@@ -1408,7 +1411,7 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 
 	CardboardSettings cardboardSettings;
 	GetCardboardSettings(config, output, &cardboardSettings);
-	if (stereoscopyOutput_) {
+	if (stereoOutput) {
 		for (int eye = 0; eye < 2; eye++) {
 			const int layer = g_Config.bStereoscopySwapEyes ? 1 - eye : eye;
 			if (stereoPost_) {

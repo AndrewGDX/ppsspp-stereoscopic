@@ -277,6 +277,7 @@ struct VulkanExtensions {
 	bool KHR_present_mode_fifo_latest_ready;
 	bool EXT_scalar_block_layout;
 	bool EXT_full_screen_exclusive;
+	bool KHR_timeline_semaphore;  // Only enabled for DisplayXR.
 	// bool EXT_depth_range_unrestricted;  // Allows depth outside [0.0, 1.0] in 32-bit float depth buffers.
 };
 

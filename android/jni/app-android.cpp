@@ -609,6 +609,9 @@ static std::string QueryConfig(std::string_view query) {
 	char temp[128];
 	if (query == "screenRotation") {
 		INFO_LOG(Log::G3D, "g_Config.screenRotation = %d", g_Config.iScreenRotation);
+		if (DisplayXR_LockLandscape()) {
+			return "5";  // Either landscape, see updateScreenRotation.
+		}
 		snprintf(temp, sizeof(temp), "%d", g_Config.iScreenRotation);
 		return temp;
 	} else if (query == "immersiveMode") {

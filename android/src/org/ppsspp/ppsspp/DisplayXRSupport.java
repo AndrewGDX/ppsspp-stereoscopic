@@ -76,6 +76,7 @@ final class DisplayXRSupport {
 
 	private static native void nativeEnvironment(DisplayXRSupport owner, PpssppActivity activity,
 		boolean eligible, boolean installed, boolean resumed, boolean camera);
+	private static native void nativeEligible(boolean eligible);
 	private static native void nativeProbe(PpssppActivity activity, boolean vendorRuntime);
 	private static native void nativeGeometry(int x, int y, int width, int height, int display);
 
@@ -106,13 +107,22 @@ final class DisplayXRSupport {
 		}
 	}
 
+	// Before NativeApp.init, which creates the Vulkan instance and device: what DisplayXR needs is only enabled then.
+	static void detect(Context context) {
+		nativeEligible(eligible(context));
+	}
+
 	private boolean eligible() {
+		return eligible(activity);
+	}
+
+	private static boolean eligible(Context context) {
 		if (Build.VERSION.SDK_INT < 26 || !Process.is64Bit() ||
 			!System.getProperty("os.arch", "").contains("aarch64")) {
 			return false;
 		}
 		try {
-			ApplicationInfo info = activity.getPackageManager().getApplicationInfo("com.leialoft.display.config", 0);
+			ApplicationInfo info = context.getPackageManager().getApplicationInfo("com.leialoft.display.config", 0);
 			return info.enabled && (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
 		} catch (PackageManager.NameNotFoundException e) {
 			return false;

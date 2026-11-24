@@ -36,8 +36,12 @@ namespace {
 std::atomic<DisplayXRStatus> status{DisplayXRStatus::UNSUPPORTED};
 std::atomic<bool> eligible{false}, foreground{false}, camera{false}, active{false};
 std::atomic<uint64_t> generation{0};
-std::atomic<bool> gameplay{false}, renderCapable{false}, retryRequested{false};
-bool HardwareReady(Draw::DrawContext *draw);
+std::atomic<bool> gameplay{false}, retryRequested{false};
+// Why the current draw context can't render DisplayXR (nullptr when it can), and the Vulkan extension it's about.
+// Static strings, so they can be swapped atomically.
+const char *const GENERIC_PROBLEM = "DisplayXR requires buffered hardware rendering with Vulkan and external-memory support.";
+std::atomic<const char *> renderProblem{GENERIC_PROBLEM}, renderProblemExtension{nullptr};
+const char *RenderProblem(Draw::DrawContext *draw, const char **extension);
 std::mutex environmentMutex;
 std::string reason;
 JavaVM *vm = nullptr;
@@ -86,7 +90,20 @@ void SetStatus(DisplayXRStatus value, const char *message) {
 DisplayXRStatus DisplayXR_GetStatus() { return status.load(); }
 std::string DisplayXR_GetReason() {
 	if (status == DisplayXRStatus::AVAILABLE && !DisplayXR_Available()) {
-		return "DisplayXR requires buffered hardware rendering with Vulkan and external-memory support.";
+		if (g_Config.iGPUBackend != (int)GPUBackend::VULKAN) {
+			return "DisplayXR needs the Vulkan graphics backend. Select Vulkan above, then restart PPSSPP.";
+		}
+		if (g_Config.bSoftwareRendering) {
+			return "DisplayXR doesn't work with software rendering.";
+		}
+		if (g_Config.bSkipBufferEffects) {
+			return "DisplayXR doesn't work with Skip buffer effects.";
+		}
+		const char *problem = renderProblem;
+		const char *extension = renderProblemExtension;
+		if (problem) {
+			return extension ? std::string(problem) + extension : std::string(problem);
+		}
 	}
 	if (DisplayXR_Selected() && DisplayXR_Available() && !camera) {
 		return "DisplayXR needs camera permission for eye tracking. Check Android app permissions, then select DisplayXR again.";
@@ -96,7 +113,7 @@ std::string DisplayXR_GetReason() {
 }
 bool DisplayXR_Selected() { return g_Config.iStereoscopyMode == (int)StereoscopyMode::DISPLAY_XR; }
 bool DisplayXR_Available() {
-	return status == DisplayXRStatus::AVAILABLE && renderCapable && g_Config.iGPUBackend == (int)GPUBackend::VULKAN &&
+	return status == DisplayXRStatus::AVAILABLE && !renderProblem && g_Config.iGPUBackend == (int)GPUBackend::VULKAN &&
 		!g_Config.bSoftwareRendering && !g_Config.bSkipBufferEffects;
 }
 bool DisplayXR_Active() { return active.load(); }
@@ -112,12 +129,15 @@ void DisplayXR_RequestRetry() {
 	JavaCall("retry");
 }
 void DisplayXR_Update(Draw::DrawContext *draw) {
-	static bool lastActive = false;
 	static bool permissionRequested = false;
 	static bool failureShown = false;
 	static bool defaultAttempted = false;
-	static bool lastReady = false;
-	if (draw) { renderCapable = HardwareReady(draw); }
+	static bool lastUsable = false;
+	if (draw) {
+		const char *extension = nullptr;
+		renderProblem = RenderProblem(draw, &extension);
+		renderProblemExtension = extension;
+	}
 	if (retryRequested.exchange(false)) { permissionRequested = false; }
 	if (DisplayXR_Available() && !g_Config.bDisplayXRDefaultApplied && !defaultAttempted) {
 		defaultAttempted = true;
@@ -130,12 +150,16 @@ void DisplayXR_Update(Draw::DrawContext *draw) {
 		JavaCall("requestCamera");
 	}
 	active = wants3D && camera;
-	const bool ready = draw ? DisplayXR_CanRender(draw) : lastReady;
-	if (active != lastActive || ready != lastReady) {
-		lastActive = active;
-		lastReady = ready;
+	// The game renders in stereo whenever DisplayXR is usable, like Half SBS, and each frame only chooses between
+	// weaving and showing one eye. Switching the rendering recreates every framebuffer, which a game showing a
+	// video doesn't redraw, so it mustn't follow gameplay, pausing or the camera permission.
+	const bool usable = DisplayXR_Selected() && DisplayXR_Available();
+	if (usable != lastUsable) {
+		lastUsable = usable;
 		System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 		DisplayXR_ModeChanged();
+		// Java asks for the rotation again, through QueryConfig.
+		System_Notify(SystemNotification::ROTATE_UPDATED);
 	}
 	if (DisplayXR_Selected() && status == DisplayXRStatus::FAILED && !failureShown) {
 		failureShown = true;
@@ -147,6 +171,8 @@ void DisplayXR_Update(Draw::DrawContext *draw) {
 		permissionRequested = false;
 	}
 }
+
+bool DisplayXR_LockLandscape() { return DisplayXR_Selected() && DisplayXR_Available(); }
 
 void DisplayXR_Gameplay(bool running) {
 	if (gameplay.exchange(running) != running) { DisplayXR_Update(); }
@@ -175,6 +201,9 @@ extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_native
 	}
 	if (!resumed) { active = false; }
 }
+extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeEligible(JNIEnv *, jclass, jboolean supported) {
+	eligible = supported;
+}
 extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeGeometry(
 	JNIEnv *, jclass, jint x, jint y, jint width, jint height, jint display) {
 	std::lock_guard<std::mutex> lock(environmentMutex);
@@ -186,6 +215,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_native
 #include <dlfcn.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/system_properties.h>
 #include <cstring>
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/GPU/Vulkan/VulkanFramebuffer.h"
@@ -235,6 +265,20 @@ struct Loader {
 	}
 } loader;  // Guarded by xrMutex, like every XR.
 
+// Switches for testing on a device without a rebuild: adb shell setprop <name> 1 (0 to turn off).
+bool DebugProperty(const char *name) {
+	char value[PROP_VALUE_MAX]{};
+	return __system_property_get(name, value) > 0 && value[0] == '1';
+}
+
+bool Succeeded(XrResult result, const char *what) {
+	if (XR_FAILED(result)) {
+		ERROR_LOG(Log::G3D, "DisplayXR: %s failed: %d", what, (int)result);
+		return false;
+	}
+	return true;
+}
+
 struct XR {
 	PFN_xrGetInstanceProcAddr get = nullptr;
 	PFN_xrCreateInstance create = nullptr;
@@ -249,16 +293,21 @@ struct XR {
 	XrInstance instance = XR_NULL_HANDLE;
 	XrSystemId system = XR_NULL_SYSTEM_ID;
 	XrSession session = XR_NULL_HANDLE;
-	jobject host = nullptr;
 
 	template<typename T> bool Load(const char *name, T &fn, XrInstance inst) {
-		return XR_SUCCEEDED(get(inst, name, (PFN_xrVoidFunction *)&fn)) && fn;
+		if (XR_SUCCEEDED(get(inst, name, (PFN_xrVoidFunction *)&fn)) && fn) {
+			return true;
+		}
+		ERROR_LOG(Log::G3D, "DisplayXR: %s is missing", name);
+		return false;
 	}
 	bool Init(jobject app, bool probe = false) {
 		Env e;
 		if (!e.env || !app) { return false; }
-		host = e.env->NewGlobalRef(app);
-		if (!loader.Init(e.env, app)) { return false; }
+		if (!loader.Init(e.env, app)) {
+			ERROR_LOG(Log::G3D, "DisplayXR: Couldn't initialize the OpenXR loader");
+			return false;
+		}
 		get = loader.get;
 		if (!Load("xrCreateInstance", create, XR_NULL_HANDLE) ||
 			!Load("xrEnumerateInstanceExtensionProperties", enumerate, XR_NULL_HANDLE)) { return false; }
@@ -273,20 +322,27 @@ struct XR {
 			return false;
 		};
 		if (!has(XR_DXR_WEAVE_EXTENSION_NAME, 20) || !has(XR_DXR_DISPLAY_INFO_EXTENSION_NAME, 22) ||
-			!has(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, 1)) { return false; }
+			!has(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, 1)) {
+			ERROR_LOG(Log::G3D, "DisplayXR: The runtime lacks an extension, or a new enough version of one");
+			return false;
+		}
 		if (probe) { return true; }
 		const char *names[] = {XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
 			XR_DXR_WEAVE_EXTENSION_NAME, XR_DXR_DISPLAY_INFO_EXTENSION_NAME};
 		XrInstanceCreateInfoAndroidKHR android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
 		android.applicationVM = vm;
-		android.applicationActivity = host;
+		// Not the Activity: given one, the runtime's IPC client (Client.java, blockingConnect) adds an opaque
+		// window of its own over the Activity's, for its compositor. We present the woven output ourselves,
+		// so that window would only hide it, and one is added for every instance until the Activity is
+		// destroyed. Its debug fd-handoff path passes a Service here, so a non-Activity Context is accepted.
+		android.applicationActivity = loader.context;
 		XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
 		ci.next = &android;
 		strcpy(ci.applicationInfo.applicationName, "PPSSPP");
 		ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 1, 0);
 		ci.enabledExtensionCount = 4;
 		ci.enabledExtensionNames = names;
-		if (XR_FAILED(create(&ci, &instance))) { return false; }
+		if (!Succeeded(create(&ci, &instance), "xrCreateInstance")) { return false; }
 		if (!Load("xrDestroyInstance", destroy, instance) || !Load("xrGetSystem", getSystem, instance) ||
 			!Load("xrCreateSession", createSession, instance) || !Load("xrDestroySession", destroySession, instance) ||
 			!Load("xrWeaveBindWindow2DXR", bind, instance) || !Load("xrWeaveSubmitDXR", weave, instance)) { return false; }
@@ -295,33 +351,38 @@ struct XR {
 		info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
 		if (XR_FAILED(getSystem(instance, &info, &system))) {
 			info.formFactor = XR_FORM_FACTOR_HANDHELD_DISPLAY;
-			if (XR_FAILED(getSystem(instance, &info, &system))) { return false; }
+			if (!Succeeded(getSystem(instance, &info, &system), "xrGetSystem")) { return false; }
 		}
 		PFN_xrEnumerateDisplaysDXR displays = nullptr;
 		if (!Load("xrEnumerateDisplaysDXR", displays, instance)) { return false; }
 		count = 0;
-		if (XR_FAILED(displays(instance, system, 0, &count, nullptr))) { return false; }
+		if (!Succeeded(displays(instance, system, 0, &count, nullptr), "xrEnumerateDisplaysDXR")) { return false; }
 		std::vector<XrDisplayDXR> panels(count, {XR_TYPE_DISPLAY_DXR});
-		if (XR_FAILED(displays(instance, system, count, &count, panels.data()))) { return false; }
+		if (!Succeeded(displays(instance, system, count, &count, panels.data()), "xrEnumerateDisplaysDXR")) { return false; }
 		for (const auto &panel : panels) {
 			if (panel.vendorPluginId[0] && strcmp(panel.vendorPluginId, "sim-display") && strcmp(panel.vendorPluginId, "sim_display")) {
 				return true;
 			}
 		}
+		ERROR_LOG(Log::G3D, "DisplayXR: No physical display among %d", (int)count);
 		return false;
 	}
 	bool Session(VulkanContext *vk) {
 		PFN_xrGetVulkanGraphicsRequirements2KHR requirements = nullptr;
 		if (!Load("xrGetVulkanGraphicsRequirements2KHR", requirements, instance)) { return false; }
 		XrGraphicsRequirementsVulkanKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR};
-		if (XR_FAILED(requirements(instance, system, &req))) { return false; }
+		if (!Succeeded(requirements(instance, system, &req), "xrGetVulkanGraphicsRequirements2KHR")) { return false; }
 		PFN_xrGetVulkanGraphicsDevice2KHR graphicsDevice = nullptr;
 		if (!Load("xrGetVulkanGraphicsDevice2KHR", graphicsDevice, instance)) { return false; }
 		XrVulkanGraphicsDeviceGetInfoKHR deviceInfo{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR};
 		deviceInfo.systemId = system;
 		deviceInfo.vulkanInstance = vk->GetInstance();
 		VkPhysicalDevice physical = VK_NULL_HANDLE;
-		if (XR_FAILED(graphicsDevice(instance, &deviceInfo, &physical)) || physical != vk->GetCurrentPhysicalDevice()) { return false; }
+		if (!Succeeded(graphicsDevice(instance, &deviceInfo, &physical), "xrGetVulkanGraphicsDevice2KHR")) { return false; }
+		if (physical != vk->GetCurrentPhysicalDevice()) {
+			ERROR_LOG(Log::G3D, "DisplayXR: The runtime wants a different Vulkan physical device");
+			return false;
+		}
 		XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
 		binding.instance = vk->GetInstance();
 		binding.physicalDevice = vk->GetCurrentPhysicalDevice();
@@ -330,7 +391,9 @@ struct XR {
 		XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO};
 		ci.next = &binding;
 		ci.systemId = system;
-		return XR_SUCCEEDED(createSession(instance, &ci, &session));
+		if (!Succeeded(createSession(instance, &ci, &session), "xrCreateSession")) { return false; }
+		NOTICE_LOG(Log::G3D, "DisplayXR: Session created");
+		return true;
 	}
 	~XR() {
 		if (session) {
@@ -338,8 +401,6 @@ struct XR {
 			if (destroySession) { destroySession(session); }
 		}
 		if (instance && destroy) { destroy(instance); }
-		Env e;
-		if (host && e.env) { e.env->DeleteGlobalRef(host); }
 	}
 };
 std::mutex xrMutex;
@@ -584,7 +645,11 @@ public:
 	}
 	bool Present(int index, std::shared_ptr<Capture> capture, Geometry geo, VkImage backbuffer, VkSemaphore complete) {
 		const int w = vk->GetBackbufferWidth(), h = vk->GetBackbufferHeight();
-		if (geo.width != w || geo.height != h || w <= 0 || h <= 0 || !Session()) { return false; }
+		if (geo.width != w || geo.height != h || w <= 0 || h <= 0) {
+			ERROR_LOG(Log::G3D, "DisplayXR: The window is %dx%d, the backbuffer %dx%d", geo.width, geo.height, w, h);
+			return false;
+		}
+		if (!Session()) { return false; }
 		auto &slot = slots[index];
 		if (!InitSlot(slot, w, h)) { return false; }
 		slot.capture = std::move(capture);
@@ -656,10 +721,17 @@ public:
 		overlays.next = &handles;
 		overlays.overlayTexture = slot.overlay->buffer;
 		XrWeaveSubmitSyncDXR sync{XR_TYPE_WEAVE_SUBMIT_SYNC_DXR};
-		sync.next = &overlays;
+		sync.next = DebugProperty("debug.ppsspp.dxr.nooverlay") ? (const void *)&handles : (const void *)&overlays;
 		sync.acquireFenceFd = fd;
+		// With a rect list, the input is window-sized with each rect holding squeezed SBS, which is what we have.
+		// Without one, the runtime takes each view to be the rect's size (a 2w x h input), whatever mode it weaves in.
+		const XrRect2Di window{{0, 0}, {w, h}};
+		XrWeaveSubmitRectsDXR rects{XR_TYPE_WEAVE_SUBMIT_RECTS_DXR};
+		rects.next = &sync;
+		rects.rectCount = 1;
+		rects.rects = &window;
 		XrWeaveSubmitInfoDXR info{XR_TYPE_WEAVE_SUBMIT_INFO_DXR};
-		info.next = &sync;
+		info.next = &rects;
 		info.inputTexture = slot.input->buffer;
 		info.rect.extent = {w, h};
 		info.firstChunk = XR_TRUE;
@@ -669,7 +741,8 @@ public:
 		out.next = &release;
 		{
 			std::lock_guard<std::mutex> lock(xrMutex);
-			ok = ok && XR_SUCCEEDED(xr->bind(xr->session, &bindInfo)) && XR_SUCCEEDED(xr->weave(xr->session, &info, &out));
+			ok = ok && Succeeded(xr->bind(xr->session, &bindInfo), "xrWeaveBindWindow2DXR") &&
+				Succeeded(xr->weave(xr->session, &info, &out), "xrWeaveSubmitDXR");
 		}
 		if (ok) {
 			fd = -1;  // The service owns it after a successful submit.
@@ -677,9 +750,17 @@ public:
 				auto next = std::make_shared<SharedImage>(vk);
 				ok = next->Import((AHardwareBuffer *)out.weavedTexture);
 				next->layout = VK_IMAGE_LAYOUT_GENERAL;
-				if (ok) { output = std::move(next); }
+				if (ok) {
+					output = std::move(next);
+					NOTICE_LOG(Log::G3D, "DisplayXR: Woven output %dx%d", output->width, output->height);
+				} else {
+					ERROR_LOG(Log::G3D, "DisplayXR: Couldn't import the woven output");
+				}
 			}
-			ok = ok && output && out.width == (uint32_t)w && out.height == (uint32_t)h;
+			if (ok && (!output || out.width != (uint32_t)w || out.height != (uint32_t)h)) {
+				ERROR_LOG(Log::G3D, "DisplayXR: Woven output is %dx%d, the window %dx%d", (int)out.width, (int)out.height, w, h);
+				ok = false;
+			}
 		}
 		if (fd >= 0) { close(fd); }
 		VkSemaphore wait = VK_NULL_HANDLE;
@@ -700,7 +781,12 @@ public:
 		}
 		if (vkBeginCommandBuffer(slot.cmd[1], &begin) != VK_SUCCESS) { return false; }
 		Barrier(slot.cmd[1], backbuffer, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-		if (ok) {
+		if (ok && DebugProperty("debug.ppsspp.dxr.passthrough")) {
+			// What we hand the runtime, instead of what it weaves.
+			Barrier(slot.cmd[1], fb->color.image, fb->color.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			Blit(slot.cmd[1], fb->color.image, w, h, backbuffer, w, h);
+			Barrier(slot.cmd[1], fb->color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, fb->color.layout);
+		} else if (ok) {
 			slot.output = output;
 			Barrier(slot.cmd[1], output->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_QUEUE_FAMILY_FOREIGN_EXT, family);
 			Blit(slot.cmd[1], output->image, w, h, backbuffer, w, h);
@@ -730,22 +816,58 @@ std::map<VulkanContext *, std::unique_ptr<Renderer>> renderers;
 }
 
 namespace {
-bool HardwareReady(Draw::DrawContext *draw) {
-	if (!eligible || draw->GetShaderLanguageDesc().shaderLanguage != GLSL_VULKAN || !draw->GetDeviceCaps().multiViewSupported) { return false; }
+// The instance and device are created when the app starts and kept until the process ends, so only a full restart
+// re-creates them (which should only be needed if the device was created before eligibility was known).
+const char *const RESTART_PROBLEM = "Close PPSSPP completely and start it again, to enable this Vulkan extension for DisplayXR: ";
+const char *const DRIVER_PROBLEM = "DisplayXR needs a Vulkan extension this GPU driver doesn't have: ";
+
+const char *RenderProblem(Draw::DrawContext *draw, const char **extension) {
+	if (!eligible) { return GENERIC_PROBLEM; }
+	if (draw->GetShaderLanguageDesc().shaderLanguage != GLSL_VULKAN) {
+		return "DisplayXR needs the Vulkan graphics backend. Restart PPSSPP to switch to it.";
+	}
+	if (!draw->GetDeviceCaps().multiViewSupported) { return "DisplayXR needs Vulkan multiview, which this GPU driver doesn't support."; }
 	auto vk = (VulkanContext *)draw->GetNativeObject(Draw::NativeObject::CONTEXT);
-	if (!vk || vk->GetPresentation() || !vk->SupportsDisplayXRPresent()) { return false; }
+	if (!vk || vk->GetPresentation()) { return GENERIC_PROBLEM; }
+	if (!vk->SupportsDisplayXRPresent()) { return "DisplayXR needs a Vulkan swapchain that can be copied to and from, without rotation."; }
+	auto missing = [](const std::vector<const char *> &enabled, const char *name) {
+		return std::none_of(enabled.begin(), enabled.end(), [&](const char *value) { return !strcmp(value, name); });
+	};
+	// The runtime calls vkGetPhysicalDeviceProperties2KHR, unchecked, through our instance.
+	if (missing(vk->GetInstanceExtensionsEnabled(), VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+		*extension = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+		return vk->IsInstanceExtensionAvailable(*extension) ? RESTART_PROBLEM : DRIVER_PROBLEM;
+	}
 	for (const char *name : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
 		VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME}) {
-		const auto &extensions = vk->GetDeviceExtensionsEnabled();
-		if (std::none_of(extensions.begin(), extensions.end(), [&](const char *value) { return !strcmp(value, name); })) { return false; }
+		if (missing(vk->GetDeviceExtensionsEnabled(), name)) {
+			*extension = name;
+			return vk->IsDeviceExtensionAvailable(name) ? RESTART_PROBLEM : DRIVER_PROBLEM;
+		}
 	}
-	return true;
+	return nullptr;
 }
+}
+// What the runtime's xrGetVulkanInstanceExtensionsKHR and xrGetVulkanDeviceExtensionsKHR ask for on Android
+// (xrt_gfx_vk_instance_extensions and xrt_gfx_vk_device_extensions in DisplayXR's comp_vk_glue.c). We create the
+// instance and device before the runtime can be asked, so they're listed here. Enabled by name, even where core:
+// the runtime looks up the KHR entry points, like vkGetPhysicalDeviceProperties2KHR, through our instance.
+void DisplayXR_InstanceExtensions(VulkanContext *vk) {
+	if (eligible) {
+		for (const char *name : {VK_KHR_EXTERNAL_FENCE_CAPABILITIES_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
+			VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME}) {
+			if (vk->IsInstanceExtensionAvailable(name)) { vk->EnableInstanceExtension(name, 0); }
+		}
+	}
 }
 void DisplayXR_DeviceExtensions(VulkanContext *vk) {
 	if (eligible) {
-		for (const char *name : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
-			VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME}) {
+		for (const char *name : {VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME, VK_KHR_EXTERNAL_FENCE_EXTENSION_NAME,
+			VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+			VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+			VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
+			VK_KHR_MAINTENANCE1_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME,
+			VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME}) {
 			if (vk->IsDeviceExtensionAvailable(name)) { vk->EnableDeviceExtension(name, 0); }
 		}
 	}
@@ -816,8 +938,9 @@ void DisplayXR_Destroy(VulkanContext *vk) {
 	renderers.erase(vk);
 }
 #else
-namespace { bool HardwareReady(Draw::DrawContext *) { return false; } }
+namespace { const char *RenderProblem(Draw::DrawContext *, const char **) { return "DisplayXR needs the 64-bit ARM build."; } }
 extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeProbe(JNIEnv *, jclass, jobject, jboolean) {}
+void DisplayXR_InstanceExtensions(VulkanContext *) {}
 void DisplayXR_DeviceExtensions(VulkanContext *) {}
 bool DisplayXR_CanRender(Draw::DrawContext *) { return false; }
 bool DisplayXR_Begin(Draw::DrawContext *, int, int) { return false; }

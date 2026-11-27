@@ -49,16 +49,28 @@ jweak owner = nullptr;
 jweak activity = nullptr;
 struct Geometry { int x = 0, y = 0, width = 0, height = 0, display = 0; } geometry;
 
+// A thread this attaches stays attached until it exits. The OpenXR loader keeps each thread's JNIEnv
+// (jnipp's thread_local) for as long as the thread is attached when it next looks, so detaching and later
+// attaching again, as the render thread did around each session, left it with a freed JNIEnv.
 class Env {
 public:
 	Env() {
 		if (vm && vm->GetEnv((void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
-			attached = vm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+			thread_local Detach detach;
+			if (vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+				detach.vm = vm;
+			} else {
+				env = nullptr;
+			}
 		}
 	}
-	~Env() { if (attached) { vm->DetachCurrentThread(); } }
 	JNIEnv *env = nullptr;
-	bool attached = false;
+
+private:
+	struct Detach {
+		JavaVM *vm = nullptr;
+		~Detach() { if (vm) { vm->DetachCurrentThread(); } }
+	};
 };
 
 void JavaCall(const char *method) {

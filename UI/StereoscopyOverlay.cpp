@@ -86,6 +86,12 @@ static const double FAST_REPEAT_AFTER = 1.5;
 static const float AXIS_PRESS = 0.6f;
 static const float AXIS_RELEASE = 0.4f;
 
+static int rememberedSelection = 0;
+
+StereoscopyOverlay::~StereoscopyOverlay() {
+	rememberedSelection = selected_;
+}
+
 StereoscopyOverlay::StereoscopyOverlay(Draw::DrawContext *draw) : draw_(draw) {
 	auto add = [&](void *ptr, RowType type, float step, bool proportional, bool (*enabled)(Draw::DrawContext *)) {
 		const ConfigSettingRef *ref = Config::FindSetting(ptr);
@@ -108,7 +114,7 @@ StereoscopyOverlay::StereoscopyOverlay(Draw::DrawContext *draw) : draw_(draw) {
 	// Last, as it's the overlay's own (and not per game).
 	add(&g_Config.iStereoscopyOverlayPosition, RowType::CHOICE, 0.0f, false, nullptr);
 
-	selected_ = 0;
+	selected_ = std::clamp(rememberedSelection, 0, (int)rows_.size() - 1);
 	if (!RowEnabled(rows_[selected_])) {
 		MoveSelection(1);
 	}

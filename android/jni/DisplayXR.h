@@ -38,9 +38,9 @@ void DisplayXR_RequestRetry();
 void DisplayXR_Gameplay(bool running);
 void DisplayXR_ModeChanged();
 std::vector<int> DisplayXR_ModeChoices();
+// Before any swapchain pass: binds the stereo atlas and schedules weaving at presentation.
 // Returns false when the game must use its normal output (including mono fallback).
 bool DisplayXR_Begin(Draw::DrawContext *draw, int width, int height);
-void DisplayXR_End(Draw::DrawContext *draw);
 void DisplayXR_Destroy(VulkanContext *vulkan);
 // Before the Vulkan instance and device are created: what the runtime needs enabled on them.
 void DisplayXR_InstanceExtensions(VulkanContext *vulkan);

@@ -27,7 +27,10 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Process;
+import android.provider.Settings;
+import android.util.Log;
 import android.view.Choreographer;
 import android.view.SurfaceView;
 import androidx.appcompat.app.AlertDialog;
@@ -39,6 +42,7 @@ import java.util.concurrent.Executors;
 /** Optional display output; never loads vendor code into PPSSPP. */
 final class DisplayXRSupport {
 	static final int CAMERA_REQUEST = 731;
+	private static final String TAG = "DisplayXR";
 	private static final String RUNTIME = "org.freedesktop.monado.openxr_runtime.out_of_process";
 	private static final String GUIDE = "https://github.com/DisplayXR/displayxr-installer/blob/main/android-installer/README.md";
 	private final PpssppActivity activity;
@@ -52,6 +56,8 @@ final class DisplayXRSupport {
 	private int probeEpoch;
 	private AlertDialog trackingPrompt;
 	private boolean cameraRequested;
+	private boolean cameraInFlight;
+	private boolean cameraPending;
 	private AlertDialog suggestion;
 	private final int[] location = new int[2];
 	private final BroadcastReceiver packages = new BroadcastReceiver() {
@@ -77,32 +83,25 @@ final class DisplayXRSupport {
 	private static native void nativeEnvironment(DisplayXRSupport owner, PpssppActivity activity,
 		boolean eligible, boolean installed, boolean resumed, boolean camera);
 	private static native void nativeEligible(boolean eligible);
-	private static native void nativeProbe(PpssppActivity activity, boolean vendorRuntime);
+	private static native void nativeProbe(PpssppActivity activity);
 	private static native void nativeGeometry(int x, int y, int width, int height, int display);
 
-	DisplayXRSupport(PpssppActivity activity, SurfaceView surface) {
+	DisplayXRSupport(PpssppActivity activity, SurfaceView surface, Bundle savedState) {
 		current = new java.lang.ref.WeakReference<>(this);
 		this.activity = activity;
 		this.surface = surface;
-		nativeEnvironment(this, activity, eligible(), installed(RUNTIME), false, false);
+		if (savedState != null) {
+			cameraRequested = savedState.getBoolean("displayxr.cameraRequested");
+			cameraInFlight = savedState.getBoolean("displayxr.cameraInFlight");
+			cameraPending = savedState.getBoolean("displayxr.cameraPending");
+		}
+		publishEnvironment();
 	}
 
 	private boolean installed(String name) {
 		try {
 			return activity.getPackageManager().getApplicationInfo(name, 0).enabled;
 		} catch (PackageManager.NameNotFoundException e) {
-			return false;
-		}
-	}
-
-	private boolean hasVendorPlugin() {
-		try {
-			ApplicationInfo app = activity.getPackageManager().getApplicationInfo(RUNTIME, 0);
-			if (new java.io.File(app.nativeLibraryDir, "libdxrp050_leia_cnsdk.so").isFile()) { return true; }
-			try (java.util.zip.ZipFile apk = new java.util.zip.ZipFile(app.sourceDir)) {
-				return apk.getEntry("lib/arm64-v8a/libdxrp050_leia_cnsdk.so") != null;
-			}
-		} catch (PackageManager.NameNotFoundException | java.io.IOException e) {
 			return false;
 		}
 	}
@@ -116,17 +115,33 @@ final class DisplayXRSupport {
 		return eligible(activity);
 	}
 
-	private static boolean eligible(Context context) {
-		if (Build.VERSION.SDK_INT < 26 || !Process.is64Bit() ||
-			!System.getProperty("os.arch", "").contains("aarch64")) {
-			return false;
-		}
+	private static boolean platformSupported() {
+		return Build.VERSION.SDK_INT >= 26 && Process.is64Bit() &&
+			System.getProperty("os.arch", "").contains("aarch64");
+	}
+
+	private static boolean knownDisplay(Context context) {
 		try {
 			ApplicationInfo info = context.getPackageManager().getApplicationInfo("com.leialoft.display.config", 0);
 			return info.enabled && (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
 		} catch (PackageManager.NameNotFoundException e) {
 			return false;
 		}
+	}
+
+	private static boolean eligible(Context context) {
+		if (!platformSupported()) { return false; }
+		try {
+			if (context.getPackageManager().getApplicationInfo(RUNTIME, 0).enabled) { return true; }
+		} catch (PackageManager.NameNotFoundException e) {
+			// A known panel can offer installation before the runtime is present.
+		}
+		return knownDisplay(context);
+	}
+
+	private void publishEnvironment() {
+		nativeEnvironment(this, activity, eligible(), installed(RUNTIME), resumed,
+			ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED);
 	}
 
 	void resume() { resume(true); }
@@ -139,9 +154,8 @@ final class DisplayXRSupport {
 		probeEpoch++;
 		boolean eligible = eligible();
 		boolean present = eligible && installed(RUNTIME);
-		nativeEnvironment(this, activity, eligible, present, true,
-			ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED);
-		if (!eligible) {
+		publishEnvironment();
+		if (!platformSupported()) {
 			return;
 		}
 		if (!receiverRegistered) {
@@ -157,7 +171,7 @@ final class DisplayXRSupport {
 		Choreographer.getInstance().removeFrameCallback(geometry);
 		if (present) { Choreographer.getInstance().postFrameCallback(geometry); }
 		SharedPreferences prefs = activity.getSharedPreferences("displayxr", 0);
-		if (allowSuggestion && !present && !prefs.getBoolean("suggested", false)) {
+		if (allowSuggestion && knownDisplay(activity) && !present && !prefs.getBoolean("suggested", false)) {
 			prefs.edit().putBoolean("suggested", true).apply();
 			suggestion = new AlertDialog.Builder(activity)
 				.setTitle("Glasses-free 3D")
@@ -166,6 +180,7 @@ final class DisplayXRSupport {
 				.setNegativeButton("Not now", null).show();
 		}
 		if (present) { startProbe(); }
+		if (cameraPending) { launchCameraRequest(); }
 	}
 
 	private void startProbe() {
@@ -174,7 +189,7 @@ final class DisplayXRSupport {
 		final int epoch = probeEpoch;
 		worker.execute(() -> {
 			if (closed || current.get() != this) { return; }
-			nativeProbe(activity, hasVendorPlugin());
+			nativeProbe(activity);
 			activity.runOnUiThread(() -> {
 				probing = false;
 				if (!closed && resumed && epoch != probeEpoch) { startProbe(); }
@@ -182,12 +197,18 @@ final class DisplayXRSupport {
 		});
 	}
 
+	void saveState(Bundle state) {
+		state.putBoolean("displayxr.cameraRequested", cameraRequested && trackingPrompt == null);
+		state.putBoolean("displayxr.cameraInFlight", cameraInFlight);
+		state.putBoolean("displayxr.cameraPending", cameraPending);
+	}
+
 	void pause() {
 		if (current.get() != this || closed) { return; }
 		resumed = false;
 		probeEpoch++;
 		Choreographer.getInstance().removeFrameCallback(geometry);
-		nativeEnvironment(this, activity, eligible(), installed(RUNTIME), false, false);
+		publishEnvironment();
 	}
 
 	void close() {
@@ -216,7 +237,7 @@ final class DisplayXRSupport {
 	void retry() {
 		activity.runOnUiThread(() -> {
 			if (!closed && resumed && current.get() == this) {
-				cameraRequested = false;
+				if (!cameraInFlight && trackingPrompt == null) { cameraRequested = false; }
 				resume(false);
 			}
 		});
@@ -224,22 +245,74 @@ final class DisplayXRSupport {
 
 	void requestCamera() {
 		activity.runOnUiThread(() -> {
-			if (!closed && resumed && current.get() == this && !cameraRequested) {
-				cameraRequested = true;
-				if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-					resume(false);
-					return;
-				}
+			if (closed || current.get() != this || cameraRequested || cameraInFlight) { return; }
+			if (!resumed) {
+				Log.i(TAG, "Camera request deferred until resume");
+				return;
+			}
+			cameraRequested = true;
+			if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+				publishEnvironment();
+				return;
+			}
+			SharedPreferences prefs = activity.getSharedPreferences("displayxr", 0);
+			boolean rationale = ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA);
+			if (prefs.getBoolean("cameraRequested", false) && !rationale) {
+				Log.i(TAG, "Camera permission cannot be requested again; offering app settings");
+				showCameraSettings();
+			} else if (rationale) {
 				trackingPrompt = new AlertDialog.Builder(activity).setTitle("DisplayXR eye tracking")
 					.setMessage("DisplayXR needs camera permission to track your eyes for glasses-free 3D.")
 					.setPositiveButton("Continue", (dialog, which) -> {
-						if (!closed && resumed && current.get() == this) {
-							ActivityCompat.requestPermissions(activity, new String[] { Manifest.permission.CAMERA }, CAMERA_REQUEST);
-						}
+						cameraPending = true;
+						surface.post(this::launchCameraRequest);
 					})
-					.setNegativeButton("Not now", null).show();
+					.setNegativeButton("Not now", null).create();
+				trackingPrompt.setOnDismissListener(dialog -> trackingPrompt = null);
+				trackingPrompt.show();
+			} else {
+				cameraPending = true;
+				launchCameraRequest();
 			}
 		});
+	}
+
+	private void launchCameraRequest() {
+		if (closed || current.get() != this || !resumed || cameraInFlight || !cameraPending) { return; }
+		cameraPending = false;
+		cameraInFlight = true;
+		activity.getSharedPreferences("displayxr", 0).edit().putBoolean("cameraRequested", true).apply();
+		Log.i(TAG, "Requesting Android camera permission");
+		ActivityCompat.requestPermissions(activity, new String[] { Manifest.permission.CAMERA }, CAMERA_REQUEST);
+	}
+
+	void cameraPermissionResult(int[] grantResults) {
+		if (closed || current.get() != this) { return; }
+		cameraInFlight = false;
+		cameraRequested = true;
+		if (grantResults.length == 0) {
+			activity.getSharedPreferences("displayxr", 0).edit().remove("cameraRequested").apply();
+		}
+		boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+		Log.i(TAG, "Camera permission result: " + (granted ? "granted" : grantResults.length == 0 ? "cancelled" : "denied"));
+		publishEnvironment();
+		if (!granted && grantResults.length > 0 && resumed &&
+			!ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) {
+			showCameraSettings();
+		}
+	}
+
+	private void showCameraSettings() {
+		if (trackingPrompt != null || closed || !resumed) { return; }
+		trackingPrompt = new AlertDialog.Builder(activity).setTitle("DisplayXR eye tracking")
+			.setMessage("Camera permission is disabled. Enable it in Android app settings to use DisplayXR eye tracking.")
+			.setPositiveButton("App settings", (dialog, which) -> {
+				Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + activity.getPackageName()));
+				activity.startActivity(intent);
+			})
+			.setNegativeButton("Not now", null).create();
+		trackingPrompt.setOnDismissListener(dialog -> trackingPrompt = null);
+		trackingPrompt.show();
 	}
 
 	void resizeSurface() {

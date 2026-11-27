@@ -4,10 +4,10 @@ PPSSPP can send its stereoscopic game output to DisplayXR's Android weave servic
 runtime handles panel calibration, eye tracking and weaving. PPSSPP presents the returned image in
 its existing Android window. No Leia SDK or proprietary display plugin is included in PPSSPP.
 
-This implementation targets 64-bit ARM Leia Android devices (including Lume Pad 2), Android 8.0/API 26
-or newer, with buffered Vulkan hardware rendering, multiview and external-memory/semaphore support.
-Detection requires the enabled OEM system package `com.leialoft.display.config`. Other DisplayXR
-brands and graphics backends are not detected by this implementation. Regular Android devices retain
+This implementation supports DisplayXR devices running 64-bit ARM Android 8.0/API 26 or newer,
+with buffered Vulkan hardware rendering, multiview and external-memory/semaphore support. Detection
+uses the installed DisplayXR runtime, its extension versions and physical-display enumeration;
+it does not require a particular device brand or vendor plugin library. Regular Android devices retain
 the existing output and receive no installation prompt. PPSSPP's overall minimum Android API stays 21.
 
 The implementation has been built and its configuration policy tested, but physical output, tracking
@@ -16,26 +16,28 @@ hardware checklist below passes.
 
 ## Installation and settings
 
-On an eligible device without DisplayXR, PPSSPP suggests installation once. **Installation guide**
+On a known Leia device without DisplayXR, PPSSPP suggests installation once. **Installation guide**
 opens the [official Android installer instructions](https://github.com/DisplayXR/displayxr-installer/blob/main/android-installer/README.md).
 **Not now** dismisses the suggestion. The same guide remains in Graphics > Stereoscopy.
 PPSSPP does not download or install another APK automatically.
 
-Install and configure the Leia-capable DisplayXR runtime using that guide, including its first-run
-setup and permissions. The expected package is
+Install and configure a DisplayXR runtime with the plugin for your display, including its first-run
+setup and permissions. The linked installer instructions cover Leia devices; other vendors may have
+their own setup. The expected package is
 `org.freedesktop.monado.openxr_runtime.out_of_process`. The generic simulated-display runtime is
 insufficient. Return to PPSSPP to trigger another background compatibility check.
 
 With a compatible runtime and Vulkan device, **DisplayXR** appears first in **Stereoscopic 3D Mode**.
-It becomes the global default once, tracked by `DisplayXRDefaultApplied` in the global `[Graphics]`
-configuration. An explicit per-game mode is preserved, as are subsequent user selections. Existing
-mode values 0–4 retain their meanings; DisplayXR uses value 5. Off, SBS and TAB remain selectable.
+Select it explicitly to enable physical 3D output. Availability never changes the global or per-game
+mode. Older configurations containing `DisplayXRDefaultApplied` remain readable; that flag is ignored.
+Existing mode values 0–4 retain their meanings; DisplayXR uses value 5. Off, SBS and TAB remain selectable.
 A previously selected DisplayXR mode stays visible if unavailable, so the user can retry it or switch
 output. Its status and setup link are shown below the setting.
 
-Camera permission is requested when a game first needs DisplayXR, with an explanation before the
-Android permission dialog. Denial keeps the game in 2D. To try again, select DisplayXR again after
-checking permissions. The runtime has its own setup and permission requirements.
+Android camera permission is requested when a game first needs DisplayXR. A retry after denial shows
+an explanation; continuing opens the Android permission dialog. Permanent denial offers Android app
+settings. Denial keeps the game in 2D. To try again, select DisplayXR again after checking permissions.
+The runtime has its own setup and permission requirements.
 
 Only active gameplay uses the physical 3D output. PPSSPP menus and paused screens use ordinary 2D.
 Touch controls, OSD and the stereoscopy settings overlay are sent as a full-window mono overlay.
@@ -55,12 +57,14 @@ require an app restart, as with ordinary Vulkan output.
 ## Rendering and synchronization
 
 `android/jni/DisplayXR.cpp` dynamically loads the OpenXR loader only on eligible devices. A background
-check verifies the vendor runtime and extension versions without creating a session or requesting
-tracking at launch. On first use, the session also enumerates physical displays and rejects the
-simulated-display plugin, and verifies that the runtime accepts PPSSPP's Vulkan physical device.
+check creates an OpenXR instance to verify extension versions and enumerate physical displays,
+rejecting the simulated-display plugin without creating a session or requesting tracking at launch.
+On first use, the session verifies that the runtime accepts PPSSPP's Vulkan physical device.
 
-The final stereo composite is captured as half-SBS into a cached framebuffer. The normal backbuffer
-is cleared to transparent for the mono UI. At presentation time, GPU copies transfer both images into
+The final stereo composite is captured as half-SBS into a cached framebuffer during output preparation,
+before any swapchain pass. Atlas layout uses the full output pixel dimensions, without Android safe
+insets or debugger dock bounds. The normal backbuffer is cleared to transparent for the mono UI.
+At presentation time, GPU copies transfer both images into
 per-frame Android hardware buffers, then `xrWeaveSubmitDXR` returns a shared woven output. The runtime
 owns calibration and interlacing; PPSSPP copies the woven pixels to its ordinary swapchain.
 
@@ -96,19 +100,19 @@ loader license texts and notices under `assets/licenses/`.
 
 ## Validation
 
-Host unit coverage (`PPSSPPUnitTest DisplayXRPolicy`) checks menu ordering, stable persisted values,
-one-time global migration, explicit per-game overrides and later user choices. The ordinary Android
-ABIs compile the optional bridge as a no-op outside arm64.
+Host unit coverage (`PPSSPPUnitTest DisplayXRPolicy DisplayXRLayout`) checks menu ordering, stable
+persisted values and full-atlas geometry with insets, overridden UI bounds and odd widths.
+The ordinary Android ABIs compile the optional bridge as a no-op outside arm64.
 
-Before announcing working Lume Pad 2 support, test on real hardware using
+Before announcing working physical DisplayXR output, test on real hardware using
 [the Android device workflow](android-device-testing.md):
 
 1. Install the APK and verify its version. On an ordinary phone, check launch, Vulkan/OpenGL gameplay,
    pause/resume, and SBS/TAB. Confirm that no DisplayXR prompt or camera request appears.
 2. On the Leia device without a runtime, check the one-time suggestion and both buttons. Relaunch to
    confirm dismissal persists. Install the vendor runtime, finish setup, and return to PPSSPP.
-3. Confirm DisplayXR is first and becomes the global default once. Test a pre-existing per-game Off,
-   SBS or TAB override; change the global mode and relaunch to confirm the later choice persists.
+3. Confirm DisplayXR is first in the mode menu, but detection preserves the selected mode. Select it
+   manually. Test a pre-existing per-game Off, SBS or TAB override and relaunch to check persistence.
 4. Start a game, decline then grant camera permission via retry. Verify real depth, correct eye order,
    overlay alignment, touch input and readable mono UI. Move the viewer to check tracking.
 5. Rotate, resize, enter multi-window, change immersive bars, and background/resume. Check interlace
@@ -134,3 +138,24 @@ in logcat, and `Session created` and the woven output size when they happen.
 The main regression risks are Vulkan external-buffer synchronization, device-specific hardware-buffer
 formats, panel orientation/phase and activity/service lifetimes. Compile and policy tests cannot
 establish that a particular vendor runtime produces correct physical 3D.
+
+## Retesting the presentation fixes
+
+Use Vulkan and `pspautotests/demos/cubevfpu.prx`, then repeat with a game that plays video:
+
+1. On first detection the saved mode stays unchanged. Select DisplayXR manually. On fresh permissions,
+   confirm Android shows its camera permission dialog. Test denial, reselection and permanent denial
+   (the latter offers app settings), then grant permission and return.
+2. Enable `debug.ppsspp.dxr.passthrough`. Both atlas halves must contain complete eye images; a mono
+   video appears in both halves. At 2560x1600 the eye regions are 1280x1600. Normal game letterboxing
+   is expected, but a status-bar-sized offset or a small image in the top-left is not.
+3. Disable passthrough and compare overlay enabled/disabled with `debug.ppsspp.dxr.nooverlay`. Check
+   tracking, eye order, full-window mono UI and correct physical depth.
+4. Change immersive bars, rotate between landscape orientations, pause/resume and repeatedly switch
+   Off/DisplayXR/Half SBS. Check that video and gameplay keep their size and do not flicker.
+5. Capture logcat from launch through the failure, including the `DisplayXR` Java tag and native
+   `DisplayXR:` messages. Report the APK version, runtime version and whether passthrough was enabled.
+
+Local builds and host tests do not verify the runtime's physical weave. An assertions-enabled Android
+build can additionally verify that selecting DisplayXR never reaches the framebuffer-after-swapchain
+assert; the optimized testing APK is intended for the remote hardware retest.

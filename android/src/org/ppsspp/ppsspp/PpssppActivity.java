@@ -313,7 +313,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	public void onRequestPermissionsResult(int requestCode, @NonNull String [] permissions, @NonNull int[] grantResults) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 		if (requestCode == DisplayXRSupport.CAMERA_REQUEST && displayXR != null) {
-			displayXR.resume();
+			displayXR.cameraPermissionResult(grantResults);
 			return;
 		}
 		switch (requestCode) {
@@ -732,6 +732,12 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	public native void requestExitRenderLoop();
 
 	@Override
+	protected void onSaveInstanceState(@NonNull Bundle outState) {
+		if (displayXR != null) { displayXR.saveState(outState); }
+		super.onSaveInstanceState(outState);
+	}
+
+	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 
@@ -826,7 +832,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		updateSystemUiVisibility();
 
 		mSurfaceView = new NativeSurfaceView(this);
-		displayXR = new DisplayXRSupport(this, mSurfaceView);
+		displayXR = new DisplayXRSupport(this, mSurfaceView, savedInstanceState);
 		surfaceManager.setSurfaceView(mSurfaceView);
 		setInsetsListener(mSurfaceView);
 		setContentView(mSurfaceView);

@@ -18,28 +18,10 @@
 #pragma once
 
 #include <vector>
-#include "Common/Data/Format/IniFile.h"
 
 namespace DisplayXRPolicy {
 inline std::vector<int> ModeChoices(bool available, int selected) {
 	return available || selected == 5 ? std::vector<int>{5, 0, 1, 2, 3, 4, 6, 7} : std::vector<int>{0, 1, 2, 3, 4, 6, 7};
 }
 
-// Only the global default is migrated. An explicit game choice and later user edits win.
-inline bool ApplyDefault(IniFile &global, const IniFile *game, int &mode, bool available) {
-	Section *graphics = global.GetOrCreateSection("Graphics");
-	bool applied = false;
-	graphics->Get("DisplayXRDefaultApplied", &applied);
-	if (!available || applied) {
-		return false;
-	}
-	graphics->Set("DisplayXRDefaultApplied", true);
-	graphics->Set("StereoscopyMode", 5);
-	int overrideMode;
-	const Section *overrideSection = game ? game->GetSection("Graphics") : nullptr;
-	if (!overrideSection || !overrideSection->Get("StereoscopyMode", &overrideMode)) {
-		mode = 5;
-	}
-	return true;
-}
 }

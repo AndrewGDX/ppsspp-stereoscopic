@@ -325,10 +325,18 @@ static std::string ReadShaderSrc(const Path &filename) {
 	return src;
 }
 
+// A DisplayXR atlas is window-sized. Safe areas and debugger dock bounds belong to the UI overlay.
+FRect GetPresentationFrame(StereoscopyMode mode, bool ignoreScreenInsets, const OutputParams &output) {
+	if (mode == StereoscopyMode::DISPLAY_XR) {
+		return {0.0f, 0.0f, (float)output.pixelWidth, (float)output.pixelHeight};
+	}
+	return GetScreenFrame(ignoreScreenInsets, output);
+}
+
 // Where each eye goes in the frame. Each eye is laid out in eyeFrame (at the origin) like a mono image is in the
 // whole frame, then drawn with the eye's viewport. The half modes squeeze each eye into half the frame, the full
 // ones keep its aspect ratio, so the two together are twice as wide (or tall) as the frame and get letterboxed.
-static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect *eyeFrame, FRect viewports[2]) {
+void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect *eyeFrame, FRect viewports[2]) {
 	const float halfW = frame.w * 0.5f;
 	const float halfH = frame.h * 0.5f;
 	const bool full = mode == StereoscopyMode::FULL_SBS || mode == StereoscopyMode::FULL_TAB;
@@ -349,6 +357,12 @@ static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect 
 		case StereoscopyMode::COLUMN_INTERLEAVED:
 			vp = frame;
 			break;
+		case StereoscopyMode::DISPLAY_XR: {
+			// Match the runtime's integer split, including an odd window width.
+			const float leftWidth = std::floor(halfW);
+			vp = {eye == 0 ? frame.x : frame.x + leftWidth, frame.y, eye == 0 ? leftWidth : frame.w - leftWidth, frame.h};
+			break;
+		}
 		case StereoscopyMode::HALF_SBS:
 		default:
 			vp = { frame.x + eye * halfW, frame.y, halfW, frame.h };
@@ -433,7 +447,7 @@ bool PresentationCommon::UpdatePostShader(const DisplayLayoutConfig &config) {
 		if (stereoPostMode_ != StereoscopyMode::OFF && usePreviousAtOutputResolution) {
 			// Both eyes' viewports together.
 			FRect eyeFrame, viewports[2];
-			GetStereoscopyLayout(stereoPostMode_, GetScreenFrame(config.bIgnoreScreenInsets, output), &eyeFrame, viewports);
+			GetStereoscopyLayout(stereoPostMode_, GetPresentationFrame(stereoPostMode_, config.bIgnoreScreenInsets, output), &eyeFrame, viewports);
 			w = (int)viewports[0].w;
 			h = (int)viewports[0].h;
 			ScaleForStereoComposite(&w, &h);
@@ -537,7 +551,7 @@ bool PresentationCommon::BuildPostShader(const DisplayLayoutConfig &config, cons
 			// If the current shader uses output res (not next), we will use output res for it.
 			const OutputParams output = GetOutput();
 			FRect rc;
-			FRect frame = GetScreenFrame(config.bIgnoreScreenInsets, output);
+			FRect frame = GetPresentationFrame(stereoPostMode_, config.bIgnoreScreenInsets, output);
 			FRect viewports[2];
 			if (stereoPostMode_ != StereoscopyMode::OFF) {
 				GetStereoscopyLayout(stereoPostMode_, frame, &frame, viewports);
@@ -778,6 +792,7 @@ static void DoReleaseVector(std::vector<T *> &list) {
 }
 
 void PresentationCommon::DestroyDeviceObjects() {
+	displayXRCaptured_ = false;
 	DoRelease(texColor_);
 	DoRelease(texColorRBSwizzle_);
 	DoRelease(texColorStereo_);
@@ -928,6 +943,7 @@ void PresentationCommon::UpdateUniforms(bool hasVideo) {
 }
 
 void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, OutputFlags flags, int uvRotation, float u0, float v0, float u1, float v1) {
+	displayXRCaptured_ = false;
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 
 	postShaderOutput_ = nullptr;
@@ -942,9 +958,6 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	const bool vrStereo = UseVRStereoSource();
 	// A mono source (like a frame from RAM) is shown to both eyes, so the layout doesn't jump.
 	stereoscopyOutput_ = gstate_c.Use(GPU_USE_STEREOSCOPY) && !(flags & OutputFlags::NATIVE_SIZE);
-#if defined(ANDROID) && !defined(__LIBRETRO__)
-	if (DisplayXR_Selected() && !DisplayXR_CanRender(draw_)) { stereoscopyOutput_ = false; }
-#endif
 	const bool postShaderAllowed = usePostShader_ && !vrStereo && !(flags & (OutputFlags::RB_SWIZZLE | OutputFlags::NO_POST_SHADER));
 	// Post shaders run on both eyes composited, once they're built for this layout (see UpdatePostShader).
 	stereoPost_ = stereoscopyOutput_ && postShaderAllowed && stereoComposite_ && stereoPostMode_ == (StereoscopyMode)g_Config.iStereoscopyMode;
@@ -959,7 +972,7 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	int pixelHeight = output.pixelHeight;
 
 	// These are the output coordinates.
-	FRect frame = GetScreenFrame(config.bIgnoreScreenInsets, output);
+	FRect frame = GetPresentationFrame(stereoscopyOutput_ ? (StereoscopyMode)g_Config.iStereoscopyMode : StereoscopyMode::OFF, config.bIgnoreScreenInsets, output);
 	if (stereoscopyOutput_) {
 		GetStereoscopyLayout((StereoscopyMode)g_Config.iStereoscopyMode, frame, &frame, stereoViewports_);
 		pixelWidth = (int)frame.w;
@@ -1222,6 +1235,16 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 		draw_->BindFramebufferAsRenderTarget(postShaderFramebuffer, {Draw::RPAction::CLEAR, Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE}, "InterFrameBlit");
 		performShaderPass(shaderInfo, postShaderFramebuffer, postShaderPipeline, postVertsOffset);
 	}
+
+#if defined(ANDROID) && !defined(__LIBRETRO__)
+	// All framebuffer passes must precede ScreenManager's swapchain passes. Capture while still preparing
+	// the output; CopyToOutput then leaves the swapchain transparent for the mono UI overlay.
+	if (stereoscopyOutput_ && !hasOutputOverride_ && lang_ == GLSL_VULKAN &&
+		DisplayXR_Begin(draw_, output.pixelWidth, output.pixelHeight)) {
+		DrawOutput(config, true);
+		displayXRCaptured_ = true;
+	}
+#endif
 }
 
 // Uploads the active overlay image if it changed. Returns false if there's nothing to draw.
@@ -1377,6 +1400,13 @@ void PresentationCommon::CopyToLibretroVR() {
 #endif
 
 void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
+	if (!displayXRCaptured_) {
+		DrawOutput(config, false);
+	}
+	presentedThisFrame_ = true;
+}
+
+void PresentationCommon::DrawOutput(const DisplayLayoutConfig &config, bool displayXR) {
 #ifdef __LIBRETRO__
 	if (lang_ == GLSL_VULKAN && Libretro::VRActive()) {
 		CopyToLibretroVR();
@@ -1413,15 +1443,12 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 			DrawOverlay(overlay, output);
 			draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 		}
-		presentedThisFrame_ = true;
 		return;
 	}
 
 	bool stereoOutput = stereoscopyOutput_;
 #if defined(ANDROID) && !defined(__LIBRETRO__)
-	const bool displayXR = stereoOutput && !hasOutputOverride_ && lang_ == GLSL_VULKAN &&
-		DisplayXR_Begin(draw_, output.pixelWidth, output.pixelHeight);
-	// One eye, for this frame only: a frame presented again without a new flip may weave.
+	// Frames not captured during preparation use the left eye as ordinary mono output.
 	if (DisplayXR_Selected() && !displayXR) { stereoOutput = false; }
 #endif
 	if (drawOverlay && overlay.layer == OverlayLayer::Background) {
@@ -1525,15 +1552,8 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	DoRelease(srcFramebuffer_);
 	DoRelease(srcTexture_);
 
-#if defined(ANDROID) && !defined(__LIBRETRO__)
-	if (displayXR) {
-		DisplayXR_End(draw_);
-	}
-#endif
 	// Unbinds all textures and samplers too, needed since sometimes a MakePixelTexture is deleted etc.
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
-
-	presentedThisFrame_ = true;
 }
 
 void PresentationCommon::CalculateRenderResolution(const DisplayLayoutConfig &config, int *width, int *height, int *scaleFactor, bool *upscaling, bool *ssaa) const {

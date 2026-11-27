@@ -131,7 +131,6 @@ void DisplayXR_RequestRetry() {
 void DisplayXR_Update(Draw::DrawContext *draw) {
 	static bool permissionRequested = false;
 	static bool failureShown = false;
-	static bool defaultAttempted = false;
 	static bool lastUsable = false;
 	if (draw) {
 		const char *extension = nullptr;
@@ -139,10 +138,6 @@ void DisplayXR_Update(Draw::DrawContext *draw) {
 		renderProblemExtension = extension;
 	}
 	if (retryRequested.exchange(false)) { permissionRequested = false; }
-	if (DisplayXR_Available() && !g_Config.bDisplayXRDefaultApplied && !defaultAttempted) {
-		defaultAttempted = true;
-		if (g_Config.ApplyDisplayXRDefault()) { DisplayXR_ModeChanged(); }
-	}
 	bool wants3D = DisplayXR_Selected() && DisplayXR_Available() && gameplay && PSP_IsInited() &&
 		!g_Config.bSoftwareRendering && !g_Config.bSkipBufferEffects && foreground;
 	if (wants3D && !camera && !permissionRequested) {
@@ -167,7 +162,7 @@ void DisplayXR_Update(Draw::DrawContext *draw) {
 	} else if (status != DisplayXRStatus::FAILED) {
 		failureShown = false;
 	}
-	if (!DisplayXR_Selected()) {
+	if (!DisplayXR_Selected() || !foreground) {
 		permissionRequested = false;
 	}
 }
@@ -199,7 +194,10 @@ extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_native
 	} else if (status != DisplayXRStatus::AVAILABLE) {
 		SetStatus(DisplayXRStatus::CHECKING, "Checking DisplayXR. Vulkan is required.");
 	}
-	if (!resumed) { active = false; }
+	if (!resumed) {
+		active = false;
+		retryRequested = true;
+	}
 }
 extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeEligible(JNIEnv *, jclass, jboolean supported) {
 	eligible = supported;
@@ -301,7 +299,7 @@ struct XR {
 		ERROR_LOG(Log::G3D, "DisplayXR: %s is missing", name);
 		return false;
 	}
-	bool Init(jobject app, bool probe = false) {
+	bool Init(jobject app) {
 		Env e;
 		if (!e.env || !app) { return false; }
 		if (!loader.Init(e.env, app)) {
@@ -326,7 +324,6 @@ struct XR {
 			ERROR_LOG(Log::G3D, "DisplayXR: The runtime lacks an extension, or a new enough version of one");
 			return false;
 		}
-		if (probe) { return true; }
 		const char *names[] = {XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
 			XR_DXR_WEAVE_EXTENSION_NAME, XR_DXR_DISPLAY_INFO_EXTENSION_NAME};
 		XrInstanceCreateInfoAndroidKHR android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR};
@@ -410,13 +407,13 @@ jobject Activity(JNIEnv *env) {
 }
 }
 
-extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeProbe(JNIEnv *env, jclass, jobject app, jboolean vendorRuntime) {
+extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeProbe(JNIEnv *env, jclass, jobject app) {
 	const uint64_t version = generation;
 	bool ready = false;
 	{
 		std::lock_guard<std::mutex> lock(xrMutex);
 		XR xr;
-		ready = vendorRuntime && xr.Init(app, true);
+		ready = xr.Init(app);
 	}
 	std::lock_guard<std::mutex> lock(environmentMutex);
 	if (version == generation && foreground && eligible) {
@@ -925,9 +922,6 @@ bool DisplayXR_Begin(Draw::DrawContext *draw, int width, int height) {
 	});
 	return true;
 }
-void DisplayXR_End(Draw::DrawContext *draw) {
-	draw->BindFramebufferAsRenderTarget(nullptr, {Draw::RPAction::CLEAR, Draw::RPAction::DONT_CARE, Draw::RPAction::DONT_CARE, 0}, "DisplayXR UI");
-}
 void DisplayXR_Present(VulkanContext *vk, int, void *, void *) {
 	std::lock_guard<std::mutex> lock(renderersMutex);
 	auto it = renderers.find(vk);
@@ -939,12 +933,11 @@ void DisplayXR_Destroy(VulkanContext *vk) {
 }
 #else
 namespace { const char *RenderProblem(Draw::DrawContext *, const char **) { return "DisplayXR needs the 64-bit ARM build."; } }
-extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeProbe(JNIEnv *, jclass, jobject, jboolean) {}
+extern "C" JNIEXPORT void JNICALL Java_org_ppsspp_ppsspp_DisplayXRSupport_nativeProbe(JNIEnv *, jclass, jobject) {}
 void DisplayXR_InstanceExtensions(VulkanContext *) {}
 void DisplayXR_DeviceExtensions(VulkanContext *) {}
 bool DisplayXR_CanRender(Draw::DrawContext *) { return false; }
 bool DisplayXR_Begin(Draw::DrawContext *, int, int) { return false; }
-void DisplayXR_End(Draw::DrawContext *) {}
 void DisplayXR_Present(VulkanContext *, int, void *, void *) {}
 void DisplayXR_Destroy(VulkanContext *) {}
 #endif

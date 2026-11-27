@@ -95,6 +95,8 @@ struct ShaderInfo;
 struct OverlayLayout;
 class TextureCacheCommon;
 enum class StereoscopyMode : int;
+FRect GetPresentationFrame(StereoscopyMode mode, bool ignoreScreenInsets, const OutputParams &output);
+void GetStereoscopyLayout(StereoscopyMode mode, FRect frame, FRect *eyeFrame, FRect viewports[2]);
 
 // Stereoscopic 3D on a normal display: both eyes are drawn in one pass, into two-layer framebuffers, and
 // presented side by side or top and bottom. The backend can do it (not software rendering or VR).
@@ -170,6 +172,7 @@ public:
 			restorePostShader_ = false;
 		}
 		presentedThisFrame_ = false;
+		displayXRCaptured_ = false;
 	}
 	bool PresentedThisFrame() const {
 		return presentedThisFrame_;
@@ -217,6 +220,7 @@ protected:
 	void ScaleForStereoComposite(int *w, int *h) const;
 
 	bool BindSource(int binding, bool bindStereo);
+	void DrawOutput(const DisplayLayoutConfig &config, bool displayXR);
 
 	bool PrepareOverlayTexture(const OverlayLayout &layout);
 	void DrawOverlay(const OverlayLayout &layout, const OutputParams &output);
@@ -269,6 +273,7 @@ protected:
 	bool usePostShader_ = false;
 	bool restorePostShader_ = false;
 	bool presentedThisFrame_ = false;
+	bool displayXRCaptured_ = false;
 	ShaderLanguage lang_;
 
 	struct PrevFBO {

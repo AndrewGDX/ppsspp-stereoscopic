@@ -96,8 +96,11 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
+#include "Core/ConfigValues.h"
 #include "Core/ConfigSettings.h"
 #include "android/jni/DisplayXRPolicy.h"
+#include "GPU/Common/PresentationCommon.h"
+#include "Common/Math/geom2d.h"
 #include "Core/HW/StereoResampler.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/File/VFS/VFS.h"
@@ -4060,30 +4063,59 @@ bool TestDisplayXRPolicy() {
 	EXPECT_EQ_INT(supported[6], 6);
 	EXPECT_EQ_INT(supported[7], 7);
 	EXPECT_EQ_INT(DisplayXRPolicy::ModeChoices(false, 5).front(), 5);
-	// Runtime disappearance must leave the saved preference identifiable.
-	for (int overrideMode : {-1, 0, 1, 2, 3, 4, 6, 7}) {
-		IniFile global, game;
-		global.GetOrCreateSection("Graphics")->Set("StereoscopyMode", 3);
-		global.GetOrCreateSection("Graphics")->Set("UnrelatedSetting", 42);
-		if (overrideMode >= 0) { game.GetOrCreateSection("Graphics")->Set("StereoscopyMode", overrideMode); }
-		int current = overrideMode >= 0 ? overrideMode : 3;
-		EXPECT_FALSE(DisplayXRPolicy::ApplyDefault(global, &game, current, false));
-		EXPECT_EQ_INT(current, overrideMode >= 0 ? overrideMode : 3);
-		EXPECT_TRUE(DisplayXRPolicy::ApplyDefault(global, &game, current, true));
-		EXPECT_EQ_INT(current, overrideMode >= 0 ? overrideMode : 5);
-		int stored = -1;
-		EXPECT_TRUE(global.GetSection("Graphics")->Get("StereoscopyMode", &stored));
-		EXPECT_EQ_INT(stored, 5);
-		EXPECT_TRUE(global.GetSection("Graphics")->Get("UnrelatedSetting", &stored));
-		EXPECT_EQ_INT(stored, 42);
-		// Later user edits survive subsequent detection and a runtime reinstall.
-		current = 4;
-		global.GetOrCreateSection("Graphics")->Set("StereoscopyMode", 4);
-		EXPECT_FALSE(DisplayXRPolicy::ApplyDefault(global, &game, current, true));
-		EXPECT_EQ_INT(current, 4);
-		EXPECT_TRUE(global.GetSection("Graphics")->Get("StereoscopyMode", &stored));
-		EXPECT_EQ_INT(stored, 4);
+
+	return true;
+}
+
+bool TestDisplayXRLayout() {
+	// The reported failure used a 2560x1600 atlas, a status-bar inset, and smaller UI bounds.
+	OutputParams output;
+	output.pixelWidth = 2560;
+	output.pixelHeight = 1600;
+	output.insetTop = 72.0f;
+	output.insetLeft = 24.0f;
+	output.useOverrideFrame = true;
+	const Bounds dock(0.0f, 72.0f, 1920.0f, 940.0f);
+	SetOverrideScreenFrame(&dock);
+	struct RestoreFrame {
+		~RestoreFrame() { SetOverrideScreenFrame(nullptr); }
+	} restoreFrame;
+	const FRect ordinary = GetPresentationFrame(StereoscopyMode::HALF_SBS, false, output);
+	EXPECT_EQ_FLOAT(ordinary.y, 72.0f);
+	EXPECT_EQ_FLOAT(ordinary.w, 1920.0f);
+	EXPECT_EQ_FLOAT(ordinary.h, 940.0f);
+	for (bool ignoreInsets : {false, true}) {
+		const FRect frame = GetPresentationFrame(StereoscopyMode::DISPLAY_XR, ignoreInsets, output);
+		EXPECT_EQ_FLOAT(frame.x, 0.0f);
+		EXPECT_EQ_FLOAT(frame.y, 0.0f);
+		EXPECT_EQ_FLOAT(frame.w, 2560.0f);
+		EXPECT_EQ_FLOAT(frame.h, 1600.0f);
+		FRect eyeFrame, viewports[2];
+		GetStereoscopyLayout(StereoscopyMode::DISPLAY_XR, frame, &eyeFrame, viewports);
+		EXPECT_EQ_FLOAT(eyeFrame.w, 2560.0f);
+		EXPECT_EQ_FLOAT(eyeFrame.h, 1600.0f);
+		for (int eye = 0; eye < 2; ++eye) {
+			EXPECT_EQ_FLOAT(viewports[eye].x, eye * 1280.0f);
+			EXPECT_EQ_FLOAT(viewports[eye].y, 0.0f);
+			EXPECT_EQ_FLOAT(viewports[eye].w, 1280.0f);
+			EXPECT_EQ_FLOAT(viewports[eye].h, 1600.0f);
+		}
 	}
+	SetOverrideScreenFrame(nullptr);
+	const FRect inset = GetPresentationFrame(StereoscopyMode::HALF_SBS, false, output);
+	EXPECT_EQ_FLOAT(inset.x, 24.0f);
+	EXPECT_EQ_FLOAT(inset.y, 72.0f);
+	EXPECT_EQ_FLOAT(inset.w, 2536.0f);
+	EXPECT_EQ_FLOAT(inset.h, 1528.0f);
+	// The runtime assigns an odd column to the right eye.
+	output.pixelWidth = 2561;
+	FRect eyeFrame, viewports[2];
+	GetStereoscopyLayout(StereoscopyMode::DISPLAY_XR,
+		GetPresentationFrame(StereoscopyMode::DISPLAY_XR, false, output), &eyeFrame, viewports);
+	EXPECT_EQ_FLOAT(viewports[0].w, 1280.0f);
+	EXPECT_EQ_FLOAT(viewports[1].x, 1280.0f);
+	EXPECT_EQ_FLOAT(viewports[1].w, 1281.0f);
+	EXPECT_EQ_FLOAT(viewports[1].x + viewports[1].w, 2561.0f);
 	return true;
 }
 
@@ -5310,6 +5342,7 @@ TestItem availableTests[] = {
 	TEST_ITEM(VolumeFunc),
 	TEST_ITEM(ConfigSettings),
 	TEST_ITEM(DisplayXRPolicy),
+	TEST_ITEM(DisplayXRLayout),
 	TEST_ITEM(SplitSearch),
 	TEST_ITEM(FriendlyPath),
 	TEST_ITEM(LinAlg),

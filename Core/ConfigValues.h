@@ -341,10 +341,8 @@ enum class StereoscopyMode : int {
 	FULL_SBS,
 	HALF_TAB,
 	FULL_TAB,
-#if defined(ANDROID) && !defined(__LIBRETRO__)
-	DISPLAY_XR = 5,
-#endif
-	ROW_INTERLEAVED = 6,  // Value 5 stays reserved for Android DisplayXR.
+	DISPLAY_XR = 5,  // Android output; also used by the shared presentation layout.
+	ROW_INTERLEAVED = 6,
 	COLUMN_INTERLEAVED = 7,
 };
 

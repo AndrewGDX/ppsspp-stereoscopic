@@ -35,6 +35,7 @@
 #include "Common/UI/ScreenManager.h"
 #include "Common/UI/View.h"
 #include "Core/Config.h"
+#include "Core/ConfigSettings.h"
 #include "Core/ConfigValues.h"
 #include "Core/Instance.h"
 #include "Core/KeyMap.h"
@@ -341,10 +342,15 @@ void BuildGraphicsSettings(SettingsPage *page) {
 			});
 		}
 #else
-		SettingItem &mode = page->Setting(&g_Config.iStereoscopyMode).EnabledFunc(stereoscopyAvailable).OnChange([](UI::EventParams &) {
-			// Takes effect in the running game, which recreates its framebuffers if stereo turns on or off.
-			System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
-		});
+		SettingItem &mode = page->Custom({I18NCat::GRAPHICS, "Stereoscopic 3D Mode"}, [manager = page->Host()->PageScreenManager()](ViewGroup *parent) -> View * {
+			const auto &info = Config::FindSetting(&g_Config.iStereoscopyMode)->setting->Info();
+			auto *choice = parent->Add(new PopupMultiChoice(&g_Config.iStereoscopyMode, GetI18NCategory(I18NCat::GRAPHICS)->T("Stereoscopic 3D Mode"), const_cast<const char **>(info.choices), info.choiceMin, info.choiceCount, I18NCat::GRAPHICS, manager));
+			choice->HideChoice(5);  // Reserved for Android DisplayXR.
+			choice->OnChoice.Add([](UI::EventParams &) {
+				System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
+			});
+			return choice;
+		}).EnabledFunc(stereoscopyAvailable);
 #endif
 		if (!StereoscopySupported(draw) && !g_Config.bSoftwareRendering) {
 			mode.Hint({I18NCat::GRAPHICS, "StereoscopyUnsupported Tip", "Unavailable with the current graphics backend or device"});

@@ -345,6 +345,10 @@ static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect 
 		case StereoscopyMode::FULL_TAB:
 			vp = { frame.x + halfW * 0.5f, frame.y + eye * halfH, halfW, halfH };
 			break;
+		case StereoscopyMode::ROW_INTERLEAVED:
+		case StereoscopyMode::COLUMN_INTERLEAVED:
+			vp = frame;
+			break;
 		case StereoscopyMode::HALF_SBS:
 		default:
 			vp = { frame.x + eye * halfW, frame.y, halfW, frame.h };
@@ -353,8 +357,12 @@ static void GetStereoscopyLayout(StereoscopyMode mode, const FRect frame, FRect 
 	}
 }
 
+static bool StereoscopyInterleaved(StereoscopyMode mode) {
+	return mode == StereoscopyMode::ROW_INTERLEAVED || mode == StereoscopyMode::COLUMN_INTERLEAVED;
+}
+
 static bool StereoscopySideBySide(StereoscopyMode mode) {
-	return mode == StereoscopyMode::HALF_SBS || mode == StereoscopyMode::FULL_SBS
+	return StereoscopyInterleaved(mode) || mode == StereoscopyMode::HALF_SBS || mode == StereoscopyMode::FULL_SBS
 #if defined(ANDROID) && !defined(__LIBRETRO__)
 		|| mode == StereoscopyMode::DISPLAY_XR
 #endif
@@ -506,7 +514,7 @@ bool PresentationCommon::BuildPostShader(const DisplayLayoutConfig &config, cons
 		return false;
 	}
 
-	if (!shaderInfo->outputResolution || next) {
+	if (!shaderInfo->outputResolution || next || StereoscopyInterleaved(stereoPostMode_)) {
 		int nextWidth = renderWidth_;
 		int nextHeight = renderHeight_;
 		ScaleForStereoComposite(&nextWidth, &nextHeight);
@@ -659,6 +667,43 @@ Draw::Pipeline *PresentationCommon::CreatePipeline(std::vector<Draw::ShaderModul
 	return pipeline;
 }
 
+struct InterleavedUniforms {
+	Draw::VsTexColUB base;
+	float stereo[4];  // axis (0 = rows), output height, bottom-left origin, output eye.
+};
+
+static const UniformBufferDesc interleavedUniformDesc{ sizeof(InterleavedUniforms), {
+	{ "WorldViewProj", 0, -1, UniformType::MATRIX4X4, 0 },
+	{ "TintSaturation", 4, -1, UniformType::FLOAT2, 64 },
+	{ "stereo", -1, 5, UniformType::FLOAT4, 80 },
+} };
+
+void GenerateInterleavedPresentationShader(ShaderWriter &writer, bool swizzle) {
+	static const VaryingDef varyings[] = {
+		{ "vec4", "oColor0", Draw::SEM_COLOR0, 0, "lowp" },
+		{ "vec2", "oTexCoord0", Draw::SEM_TEXCOORD0, 1, "highp" },
+	};
+	static const SamplerDef samplers[] = {{ 0, "tex", {} }};
+	static const UniformDef uniforms[] = {
+		{ "mat4", "WorldViewProj", 0 },
+		{ "vec4", "TintSaturation", 4 },
+		{ "vec4", "stereo", 5 },
+	};
+	writer.HighPrecisionFloat();
+	writer.SetFlags(ShaderWriterFlags::FS_FRAGCOORD);
+	writer.DeclareSamplers(samplers);
+	writer.BeginFSMain(uniforms, varyings);
+	writer.C("float y = mix(gl_FragCoord.y, stereo.y - gl_FragCoord.y, stereo.z);\n");
+	writer.C("float pixel = floor(mix(y, gl_FragCoord.x, stereo.x));\n");
+	writer.C("if (mod(pixel, 2.0) != stereo.w) { DISCARD; }\n");
+	writer.C("vec4 col = ").SampleTexture2D("tex", "oTexCoord0").C(" * oColor0;\n");
+	writer.C("col.rgb *= oColor0.a;\n");
+	if (swizzle) {
+		writer.C("col = col.bgra;\n");
+	}
+	writer.EndFSMain("col");
+}
+
 void PresentationCommon::CreateDeviceObjects() {
 	using namespace Draw;
 
@@ -698,6 +743,18 @@ void PresentationCommon::CreateDeviceObjects() {
 			fs->Release();
 		}
 	}
+	if (draw_->GetDeviceCaps().multiViewSupported || draw_->GetDeviceCaps().stereoPassReplaySupported) {
+		for (int swizzle = 0; swizzle < 2; ++swizzle) {
+			char code[4096];
+			ShaderWriter writer(code, draw_->GetShaderLanguageDesc(), ShaderStage::Fragment);
+			GenerateInterleavedPresentationShader(writer, swizzle != 0);
+			ShaderModule *fs = draw_->CreateShaderModule(ShaderStage::Fragment, writer.Lang().shaderLanguage, (const uint8_t *)code, strlen(code), "present_interleaved");
+			if (fs) {
+				texColorInterleaved_[swizzle] = CreatePipeline({ draw_->GetVshaderPreset(VS_TEXTURE_COLOR_2D), fs }, false, &interleavedUniformDesc);
+				fs->Release();
+			}
+		}
+	}
 	overlayVdata_ = draw_->CreateBuffer(sizeof(Vertex) * 4, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
 	// Not resetting restorePostShader_: after a device loss, BeginFrame uses it to bring the post-shader back.
 }
@@ -724,6 +781,9 @@ void PresentationCommon::DestroyDeviceObjects() {
 	DoRelease(texColor_);
 	DoRelease(texColorRBSwizzle_);
 	DoRelease(texColorStereo_);
+	for (auto &pipeline : texColorInterleaved_) {
+		DoRelease(pipeline);
+	}
 	DoRelease(texColorBlend_);
 	DoRelease(overlayVdata_);
 	DoRelease(overlayTexture_);
@@ -785,7 +845,7 @@ bool GetStereoscopyEyeViewports(const DisplayLayoutConfig &config, float pixelWi
 #endif
 	// The flag follows the setting on the next frame, so this matches how the game was drawn.
 	const StereoscopyMode mode = (StereoscopyMode)g_Config.iStereoscopyMode;
-	if (!gstate_c.Use(GPU_USE_STEREOSCOPY) || mode == StereoscopyMode::OFF) {
+	if (!gstate_c.Use(GPU_USE_STEREOSCOPY) || mode == StereoscopyMode::OFF || StereoscopyInterleaved(mode)) {
 		return false;
 	}
 	FRect eyeFrame;
@@ -1412,6 +1472,16 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	CardboardSettings cardboardSettings;
 	GetCardboardSettings(config, output, &cardboardSettings);
 	if (stereoOutput) {
+		const auto mode = (StereoscopyMode)g_Config.iStereoscopyMode;
+		const bool interleaved = StereoscopyInterleaved(mode);
+		if (interleaved) {
+			Draw::Pipeline *interleavedPipeline = texColorInterleaved_[(outputFlags_ & OutputFlags::RB_SWIZZLE) ? 1 : 0];
+			if (!interleavedPipeline) {
+				ERROR_LOG(Log::G3D, "Interleaved presentation pipeline unavailable");
+				return;
+			}
+			draw_->BindPipeline(interleavedPipeline);
+		}
 		for (int eye = 0; eye < 2; eye++) {
 			const int layer = g_Config.bStereoscopySwapEyes ? 1 - eye : eye;
 			if (stereoPost_) {
@@ -1419,6 +1489,15 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 				draw_->BindVertexBuffer(vdata_, eye == 0 ? 0 : (int)sizeof(Vertex) * 12);
 			} else if (srcFramebuffer_) {
 				draw_->BindFramebufferAsTexture(srcFramebuffer_, 0, Draw::Aspect::COLOR_BIT, srcFramebuffer_->Layers() > 1 ? layer : 0);
+			}
+			if (interleaved) {
+				InterleavedUniforms ub{};
+				memcpy(ub.base.WorldViewProj, output.rotMatrix.m, sizeof(float) * 16);
+				ub.stereo[0] = mode == StereoscopyMode::COLUMN_INTERLEAVED ? 1.0f : 0.0f;
+				ub.stereo[1] = (float)output.pixelHeight;
+				ub.stereo[2] = draw_->GetDeviceCaps().coordConvention == CoordConvention::OpenGL ? 1.0f : 0.0f;
+				ub.stereo[3] = (float)eye;
+				draw_->UpdateDynamicUniformBuffer(&ub, sizeof(ub));
 			}
 			const FRect &vp = stereoViewports_[eye];
 			setViewport(vp.x, vp.y, vp.w, vp.h);

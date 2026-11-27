@@ -16,6 +16,8 @@
 #include "GPU/Common/StencilCommon.h"
 #include "GPU/Common/DepalettizeShaderCommon.h"
 #include "GPU/Common/Draw2D.h"
+#include "GPU/Common/PresentationCommon.h"
+#include "Common/GPU/ShaderWriter.h"
 
 #include "UnitTest.h"
 
@@ -552,6 +554,31 @@ bool TestFragmentShaders() {
 
 	for (int i = 0; i < numLanguages; i++) {
 		delete[] buffer[i];
+	}
+	return true;
+}
+
+bool TestInterleavedPresentationShaders() {
+#if PPSSPP_PLATFORM(WINDOWS)
+	LoadD3D11();
+#endif
+	init_glslang();
+	for (ShaderLanguage lang : {GLSL_1xx, GLSL_3xx, GLSL_VULKAN
+#if PPSSPP_PLATFORM(WINDOWS)
+		, HLSL_D3D11
+#endif
+	}) {
+		for (bool swizzle : {false, true}) {
+			char code[4096];
+			ShaderLanguageDesc desc(lang);
+			ShaderWriter writer(code, desc, ShaderStage::Fragment);
+			GenerateInterleavedPresentationShader(writer, swizzle);
+			std::string error;
+			if (!TestCompileShader(code, lang, ShaderStage::Fragment, &error)) {
+				printf("Interleaved presentation shader failed: %s\n%s\n", error.c_str(), code);
+				return false;
+			}
+		}
 	}
 	return true;
 }

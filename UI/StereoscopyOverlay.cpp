@@ -355,6 +355,11 @@ void StereoscopyOverlay::Cycle(Row &row, bool wrap, int dir) {
 	const int minValue = info.choiceMin;
 	const int maxValue = info.choiceMin + info.choiceCount - 1;
 	int newValue = *value + dir;
+#if !defined(ANDROID) || defined(__LIBRETRO__)
+	if (row.ptr == &g_Config.iStereoscopyMode && newValue == 5) {
+		newValue += dir;
+	}
+#endif
 	if (newValue > maxValue) {
 		newValue = wrap ? minValue : maxValue;
 	} else if (newValue < minValue) {

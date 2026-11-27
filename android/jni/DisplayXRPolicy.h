@@ -22,7 +22,7 @@
 
 namespace DisplayXRPolicy {
 inline std::vector<int> ModeChoices(bool available, int selected) {
-	return available || selected == 5 ? std::vector<int>{5, 0, 1, 2, 3, 4} : std::vector<int>{0, 1, 2, 3, 4};
+	return available || selected == 5 ? std::vector<int>{5, 0, 1, 2, 3, 4, 6, 7} : std::vector<int>{0, 1, 2, 3, 4, 6, 7};
 }
 
 // Only the global default is migrated. An explicit game choice and later user edits win.

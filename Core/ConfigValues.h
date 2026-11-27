@@ -344,6 +344,8 @@ enum class StereoscopyMode : int {
 #if defined(ANDROID) && !defined(__LIBRETRO__)
 	DISPLAY_XR = 5,
 #endif
+	ROW_INTERLEAVED = 6,  // Value 5 stays reserved for Android DisplayXR.
+	COLUMN_INTERLEAVED = 7,
 };
 
 enum class StereoscopyDominantEye : int {

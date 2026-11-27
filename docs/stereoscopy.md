@@ -1,8 +1,8 @@
 # Stereoscopic 3D
 
 Stereoscopic 3D for a normal display: both eyes are rendered, and presented side by side or top and
-bottom for a 3D TV, projector or headset that takes such a signal. Settings > Graphics > Stereoscopy,
-per game. Separate from VR (`Common/VR`), which shares the single-pass stereo rendering but takes its
+bottom, or interleaved by row or column, for a 3D TV, projector or headset that takes such a signal.
+Settings > Graphics > Stereoscopy, per game. Separate from VR (`Common/VR`), which shares the single-pass stereo rendering but takes its
 views from the headset.
 
 Android also has an optional [DisplayXR output](displayxr-android.md) for glasses-free 3D on Leia
@@ -119,11 +119,17 @@ it costs no shader variants:
 `GetStereoscopyLayout()` lays each eye out in its own viewport: half modes squeeze each eye into half the
 frame, full modes keep its aspect ratio (two 16:9 eyes side by side make 32:9, letterboxed). Each eye is
 laid out like a mono image would be in the whole frame, so stretching, integer scaling and pillarboxing work
-per eye. Swap eyes swaps the layers there. A mono source (a frame from RAM) is shown to both eyes.
+per eye. Row-Interleaved and Column-Interleaved use the full frame for each eye, selecting alternating physical
+output pixels in the final presentation shader. Even rows (from the top) or columns (from the left)
+show the left eye; Swap Eyes reverses this. The pattern is anchored to the output, including when the
+game is letterboxed, and follows output resolution rather than render resolution. Display scaling
+after presentation can disturb the pattern; use the display's native resolution.
+
+Swap eyes swaps the layers there. A mono source (a frame from RAM) is shown to both eyes.
 
 Post shaders run on both eyes together: the eyes are first composited side by side (or top and bottom) at
-render resolution, cropped and swapped, into `stereoComposite_`, the chain runs on that with its framebuffers
-twice as wide (or tall), and each eye then shows its half. So a shader sees one image twice the size, and
+render resolution, cropped and swapped, into `stereoComposite_` (side by side for interleaved output).
+The chain runs on that with its framebuffers twice as wide (or tall), and each eye then shows its half. So a shader sees one image twice the size, and
 effects that depend on the position in the frame (vignette) span both eyes, while ones that sample neighbours
 only bleed across the seam by their radius. The overlay and Cardboard VR are off while stereoscopy is on.
 
@@ -149,6 +155,9 @@ keeps its default in a `controls.ini` from before it existed (`KeepsDefaultIfMis
   viewport (`GetStereoscopyEyeViewports`), so the display's stretch of a half mode eye gives it the right
   aspect. Both eyes get the same image, which puts it at screen depth regardless of the UI depth. Touches are
   mapped back through the eye they land in. Without stereoscopy it's drawn once.
+- **Selection** stays in RAM across overlay closes and game changes until the emulator exits. A disabled
+  remembered row moves to the next enabled row. It is never saved to config. In interleaved modes the
+  panel is drawn once at full size, giving both eyes the same screen-depth image.
 - **Position** (`StereoscopyOverlayPosition`, global): center left or right is a column, top or bottom center
   a strip with the settings in two columns. Everything scales down together if it doesn't fit.
 

@@ -4048,16 +4048,20 @@ bool TestDisplayXRPolicy() {
 	// A real device gains a new first choice without renumbering saved layouts.
 	const auto ordinary = DisplayXRPolicy::ModeChoices(false, 0);
 	const auto supported = DisplayXRPolicy::ModeChoices(true, 0);
-	EXPECT_EQ_INT(ordinary.size(), 5);
-	EXPECT_EQ_INT(supported.size(), 6);
+	EXPECT_EQ_INT(ordinary.size(), 7);
+	EXPECT_EQ_INT(supported.size(), 8);
 	EXPECT_EQ_INT(supported.front(), 5);
 	for (int i = 0; i < 5; ++i) {
 		EXPECT_EQ_INT(ordinary[i], i);
 		EXPECT_EQ_INT(supported[i + 1], i);
 	}
+	EXPECT_EQ_INT(ordinary[5], 6);
+	EXPECT_EQ_INT(ordinary[6], 7);
+	EXPECT_EQ_INT(supported[6], 6);
+	EXPECT_EQ_INT(supported[7], 7);
 	EXPECT_EQ_INT(DisplayXRPolicy::ModeChoices(false, 5).front(), 5);
 	// Runtime disappearance must leave the saved preference identifiable.
-	for (int overrideMode : {-1, 0, 1, 2, 3, 4}) {
+	for (int overrideMode : {-1, 0, 1, 2, 3, 4, 6, 7}) {
 		IniFile global, game;
 		global.GetOrCreateSection("Graphics")->Set("StereoscopyMode", 3);
 		global.GetOrCreateSection("Graphics")->Set("UnrelatedSetting", 42);
@@ -4470,6 +4474,7 @@ bool TestX64Emitter();
 bool TestRiscVEmitter();
 bool TestLoongArch64Emitter();
 bool TestShaderGenerators();
+bool TestInterleavedPresentationShaders();
 bool TestIRPassSimplify();
 bool TestThreadManager();
 bool TestVFS();
@@ -5276,6 +5281,7 @@ TestItem availableTests[] = {
 	TEST_ITEM(MemMap),
 	TEST_ITEM(BlockShadow),
 	TEST_ITEM(ShaderGenerators),
+	TEST_ITEM(InterleavedPresentationShaders),
 	TEST_ITEM(Path),
 	TEST_ITEM(OverlayHole),
 	TEST_ITEM(AndroidContentURI),

@@ -931,9 +931,7 @@ static constexpr const char *androidHwScaleNames[] = { "Native device resolution
 static constexpr const char *frameSkipNames[] = { "Off", "1", "2", "3", "4" };
 static constexpr const char *skipGPUReadbackModeNames[] = { "No", "Skip", "Copy to texture" };
 static constexpr const char *stereoscopyModeNames[] = { "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)"
-#if defined(ANDROID) && !defined(__LIBRETRO__)
-	, "DisplayXR"
-#endif
+	, "DisplayXR", "Row-Interleaved", "Column-Interleaved"
 };
 static constexpr const char *stereoscopyDominantEyeNames[] = { "None", "Left", "Right" };
 static constexpr const char *stereoscopyUIDetectionNames[] = { "Off", "Safe", "Advanced" };

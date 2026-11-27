@@ -35,6 +35,7 @@ enum class ShaderWriterFlags {
 	// In HLSL, those samplers are only arrays with this set, and the pixel shader gets gl_ViewIndex from a vertex
 	// shader compiled with PPSSPP_STEREO defined (see BeginVSMain), which draws an instance per eye.
 	FS_AUTO_STEREO = 2,
+	FS_FRAGCOORD = 4,  // Expose pixel position to HLSL fragment shaders.
 };
 ENUM_CLASS_BITOPS(ShaderWriterFlags);
 

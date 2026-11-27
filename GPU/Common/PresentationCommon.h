@@ -88,6 +88,9 @@ class ShaderModule;
 class Texture;
 }
 
+class ShaderWriter;
+void GenerateInterleavedPresentationShader(ShaderWriter &writer, bool swizzle);
+
 struct ShaderInfo;
 struct OverlayLayout;
 class TextureCacheCommon;
@@ -227,6 +230,7 @@ protected:
 	Draw::Pipeline *texColorRBSwizzle_ = nullptr;
 	// VR with a stereo (two-layer) source: each view of the multiview backbuffer samples its own layer.
 	Draw::Pipeline *texColorStereo_ = nullptr;
+	Draw::Pipeline *texColorInterleaved_[2]{};
 	Draw::SamplerState *samplerNearest_ = nullptr;
 	Draw::SamplerState *samplerLinear_ = nullptr;
 	Draw::Buffer *vdata_ = nullptr;

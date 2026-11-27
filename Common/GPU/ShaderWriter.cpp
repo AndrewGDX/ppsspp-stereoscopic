@@ -293,6 +293,9 @@ void ShaderWriter::BeginFSMain(Slice<UniformDef> uniforms, Slice<VaryingDef> var
 			// From a vertex shader compiled with PPSSPP_STEREO.
 			C("  nointerpolation uint gl_ViewIndex : TEXCOORD7, ");
 		}
+		if (flags_ & ShaderWriterFlags::FS_FRAGCOORD) {
+			C("  vec4 gl_FragCoord : SV_Position, ");
+		}
 		// Erase the last comma
 		Rewind(2);
 

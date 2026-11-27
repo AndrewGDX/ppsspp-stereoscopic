@@ -66,7 +66,7 @@ protected:
 	}
 
 private:
-	const char *names_[6] = { "DisplayXR", "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)" };
+	const char *names_[8] = { "DisplayXR", "Off", "Half SBS (Side-by-Side)", "Full SBS (Side-by-Side)", "Half TAB (Top-and-Bottom)", "Full TAB (Top-and-Bottom)", "Row-Interleaved", "Column-Interleaved" };
 	ScreenManager *manager_;
 	int index_ = 0;
 	std::vector<int> values_;
